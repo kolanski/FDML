@@ -206,9 +206,9 @@ flow:
   id: string
   name: string
   steps:
-    - action: string          # Идентификатор действия
-      on_success: string      # Следующий шаг при успешном выполнении
-      on_failure: string      # Следующий шаг при ошибке (опционально)
+    - action_id: string              # Идентификатор действия для выполнения
+      on_success_action_id: string   # ID следующего действия при успехе
+      on_failure_action_id: string   # ID следующего действия при ошибке (опционально)
 ```
 
 ---

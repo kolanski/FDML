@@ -206,9 +206,9 @@ flow:
   id: string
   name: string
   steps:
-    - action: string          # Action identifier
-      on_success: string      # Next step on successful execution
-      on_failure: string      # Next step on error (optional)
+    - action_id: string              # Action identifier to execute
+      on_success_action_id: string   # Next action ID on successful execution
+      on_failure_action_id: string   # Next action ID on error (optional)
 ```
 
 ---
