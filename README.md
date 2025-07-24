@@ -85,6 +85,8 @@ From this, FDML generates everything. No ambiguity. No telephone game. Just feat
 - [ ] Test suite generator
 - [ ] Migration runner
 
+📋 **Detailed Implementation Plan**: [CLI Tools Roadmap →](CLI_TOOLS_ROADMAP.md)
+
 ### Phase 3: VS Code Extension 🔮
 - [ ] Syntax highlighting & IntelliSense
 - [ ] Real-time validation
@@ -148,7 +150,8 @@ Strong typing from specification to implementation. If it compiles, it works.
 ## 🚦 Getting Started
 
 1. **Read the Spec**: [FDML Specification v1.3](FDML-1.3-en.md)
-2. **Follow Development**: [Twitter](https://twitter.com/KolanskiNik)
+2. **CLI Tools Development**: [CLI Tools Roadmap](CLI_TOOLS_ROADMAP.md) | [Technical Spec](CLI_TOOLS_TECHNICAL_SPEC.md) | [Quick Reference](CLI_TOOLS_QUICK_REFERENCE.md)
+3. **Follow Development**: [Twitter](https://twitter.com/KolanskiNik)
 
 ## 💰 Build Your Competitive Moat
 
