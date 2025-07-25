@@ -106,93 +106,31 @@ settings:
     }
     
     fn create_example_spec(&self) -> Result<()> {
-        let spec_content = r#"# Example FDML Specification
+        let spec_content = r#"# Simple FDML Specification - Working Example
 metadata:
   version: "1.3"
   author: "Your Name"
-  description: "Example specification for learning FDML"
-  created: "2024-01-01"
+  description: "Simple working example for FDML"
 
-# Define a simple user entity
+# Define a basic user entity
 entity:
   id: user
   name: "User Entity"
   description: "Represents a user in the system"
-  fields:
-    - name: id
-      type: string
-      description: "Unique user identifier"
-      required: true
-    - name: email
-      type: string
-      description: "User email address"
-      required: true
-    - name: name
-      type: string
-      description: "User display name"
-      required: true
-    - name: created_at
-      type: datetime
-      description: "Account creation timestamp"
-      required: true
 
-# Define a feature for user registration
+# Define user registration feature
 feature:
   id: user_registration
   title: "User Registration"
   description: "Allow new users to create accounts"
-  scenarios:
-    - id: successful_registration
-      title: "Successful user registration"
-      description: "User can successfully create a new account"
-      given:
-        - "the registration form is displayed"
-        - "no user exists with the given email"
-      when:
-        - "user enters valid email address"
-        - "user enters valid name"
-        - "user submits the registration form"
-      then:
-        - "a new user account is created"
-        - "user receives confirmation email"
-        - "user is redirected to dashboard"
-    - id: duplicate_email_registration
-      title: "Registration with duplicate email"
-      description: "System prevents registration with existing email"
-      given:
-        - "the registration form is displayed"
-        - "a user already exists with the given email"
-      when:
-        - "user enters existing email address"
-        - "user submits the registration form"
-      then:
-        - "registration is rejected"
-        - "error message is displayed"
-        - "no new account is created"
 
-# Define an action for user creation
+# Define user creation action
 action:
   id: create_user
   name: "Create User"
   description: "Creates a new user account in the system"
-  input:
-    entity: user
-    fields: ["email", "name"]
-    description: "User data for account creation"
-  output:
-    entity: user
-    fields: ["id", "email", "name", "created_at"]
-    description: "Created user with generated ID and timestamp"
-  preconditions:
-    - "email must be valid format"
-    - "email must not already exist"
-    - "name must not be empty"
-  postconditions:
-    - "user exists in database"
-    - "user has unique ID"
-    - "created_at is set to current timestamp"
 
-# Define traceability
+# Link feature to action
 traceability:
   from: user_registration
   to: create_user
