@@ -1,95 +1,95 @@
 # FDML CLI Tools Roadmap
 
-## 🎯 Минимально жизнеспособный CLI (MVP)
+## 🎯 Minimum Viable CLI (MVP)
 
 The core CLI functionality will include:
 
 ```bash
-fdml init                    # Создать структуру директорий
-fdml validate spec.fdml      # Проверить синтаксис и структуру  
-fdml feature add auth        # Добавить новую фичу через CLI
-fdml feature list           # Показать все фичи
-fdml check                  # Проверить целостность спецификации
+fdml init                    # Create directory structure
+fdml validate spec.fdml      # Check syntax and structure  
+fdml feature add auth        # Add new feature via CLI
+fdml feature list           # Show all features
+fdml check                  # Check specification integrity
 ```
 
-## 🔧 Подготовка для VSCode интеграции
+## 🔧 VSCode Integration Preparation
 
-1. **Language Server Protocol (LSP)** - для подсветки синтаксиса
-2. **Линтер** - проверка правил FDML
-3. **Валидатор синтаксиса** - показ ошибок в реальном времени
-4. **Автокомплит** - подсказки при написании фич
-5. **Go to Definition** - навигация между связанными фичами
+1. **Language Server Protocol (LSP)** - for syntax highlighting
+2. **Linter** - FDML rules validation
+3. **Syntax Validator** - real-time error display
+4. **Autocomplete** - suggestions when writing features
+5. **Go to Definition** - navigation between related features
 
 ## 📋 Detailed Phase Breakdown
 
-### **Phase 1: Foundation & Core Parser (Недели 1-4)**
-- ✅ Создание базовой архитектуры проекта
-- ✅ Реализация FDML парсера
-- ✅ Построение AST (Abstract Syntax Tree)
-- ✅ Базовые команды CLI (`init`, `validate`)
-- ✅ Обработка ошибок и пользовательские сообщения
+### **Phase 1: Foundation & Core Parser (Weeks 1-4)**
+- ✅ Basic project architecture creation
+- ✅ FDML parser implementation
+- ✅ AST (Abstract Syntax Tree) construction
+- ✅ Basic CLI commands (`init`, `validate`)
+- ✅ Error handling and user messages
 
-### **Phase 2: Validation & Project Structure (Недели 5-8)**
-- ✅ Система валидации FDML спецификаций
-- ✅ Команды управления фичами (`feature add`, `feature list`)
-- ✅ Создание и управление структурой директорий
-- ✅ Проверка целостности проекта (`check`)
-- ✅ Расширенная обработка ошибок
+### **Phase 2: Validation & Project Structure (Weeks 5-8)**
+- ✅ FDML specification validation system
+- ✅ Feature management commands (`feature add`, `feature list`)
+- ✅ Directory structure creation and management
+- ✅ Project integrity checking (`check`)
+- ✅ Enhanced error handling
 
-### **Phase 3: LSP Foundation (Недели 9-12)**
-- ✅ Подготовка архитектуры для Language Server
-- ✅ Базовые диагностики и валидация в реальном времени
-- ✅ Подсветка синтаксиса FDML
-- ✅ Навигация по фичам (Go to Definition)
-- ✅ Тестирование и документация
+### **Phase 3: LSP Foundation (Weeks 9-12)**
+- ✅ Language Server architecture preparation
+- ✅ Basic diagnostics and real-time validation
+- ✅ FDML syntax highlighting
+- ✅ Feature navigation (Go to Definition)
+- ✅ Testing and documentation
 
-### **Phase 4: VSCode Integration (Недели 13-16)**
-- ✅ Создание VSCode расширения
-- ✅ Интеграция с LSP сервером
-- ✅ Автокомплит и подсказки
-- ✅ Визуализация структуры проекта
-- ✅ Отладка и оптимизация
+### **Phase 4: VSCode Integration (Weeks 13-16)**
+- ✅ VSCode extension creation
+- ✅ LSP server integration
+- ✅ Autocomplete and suggestions
+- ✅ Project structure visualization
+- ✅ Debugging and optimization
 
-## 🏗️ Техническая архитектура
+## 🏗️ Technical Architecture
 
-### Основные модули
+### Core Modules
 ```
 fdml-cli/
-├── parser/          # FDML → AST парсер
-├── validator/       # Проверка правил и валидация
-├── project/         # Управление структурой проекта
-├── features/        # Работа с фичами
+├── parser/          # FDML → AST parser
+├── validator/       # Rules validation and checking
+├── project/         # Project structure management
+├── features/        # Feature operations
 ├── lsp/            # Language Server Protocol
-└── cli/            # Интерфейс командной строки
+└── cli/            # Command line interface
 ```
 
-### Технологический стек
-- **Основной язык**: Rust (производительность, безопасность памяти)
-- **Альтернатива**: TypeScript (быстрое развитие экосистемы)
-- **LSP**: Использование tower-lsp для Rust или vscode-languageserver для TS
-- **CLI**: clap для Rust или commander для TS
+### Technology Stack
+- **Primary Language**: Rust (performance, memory safety)
+- **Alternative**: TypeScript (rapid ecosystem development)
+- **LSP**: Using tower-lsp for Rust or vscode-languageserver for TS
+- **CLI**: clap for Rust or commander for TS
 
 ## ✅ Success Metrics
-- ✅ Парсинг базовых FDML спецификаций
-- ✅ Создание структуры проекта одной командой
-- ✅ Валидация с понятными сообщениями об ошибках
-- ✅ Работающее VSCode расширение с подсветкой синтаксиса
-- ✅ Навигация между связанными фичами
+- ✅ Parse basic FDML specifications
+- ✅ Create project structure with one command
+- ✅ Validation with clear error messages
+- ✅ Working VSCode extension with syntax highlighting
+- ✅ Navigate between related features
 
-## ❌ Исключено из текущего роадмапа
+## ❌ Excluded from Current Roadmap
 
-Следующие возможности отложены для более поздних версий:
-- Кодогенерацию (будет добавлена после LLM интеграции)
-- Поддержку множественных языков программирования
-- Сложные шаблоны и миграции
-- Генерацию тестов
+The following capabilities are deferred to later versions:
+- Code generation (will be added after LLM integration)
+- Multiple programming language support
+- Complex templates and migrations
+- Test generation
 
-## 🚀 Будущее развитие
+## 🚀 Future Development
 
-Этот обновленный роадмап создает прочную основу для будущего развития и интеграции с LLM для кодогенерации в более поздних версиях.
+This updated roadmap creates a solid foundation for future development and LLM integration for code generation in later versions.
 
-После завершения Phase 4 планируется:
-- Интеграция с LLM для кодогенерации
-- Поддержка множественных языков программирования
-- Расширенные возможности генерации и шаблонов
-- Интеграция с CI/CD системами
+After completing Phase 4, the following is planned:
+- LLM integration for code generation
+- Multiple programming language support
+- Advanced generation capabilities and templates
+- CI/CD system integration
