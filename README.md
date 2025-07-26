@@ -21,12 +21,12 @@ Feature: User can monetize their content
     And creator receives 90% revenue share
 ```
 
-This isn't just documentation. It's **executable specification** that generates:
-- ✅ API endpoints
-- ✅ Database migrations  
-- ✅ Test suites
-- ✅ Type definitions
-- ✅ Documentation
+This isn't just documentation. It's **structured specification** that enables:
+- ✅ Clear feature definitions
+- ✅ Validation and consistency checking
+- ✅ Team alignment and communication
+- ✅ Foundation for future tooling
+- ✅ Traceability and documentation
 
 ## 💡 Why FDML?
 
@@ -61,49 +61,55 @@ From this, FDML generates everything. No ambiguity. No telephone game. Just feat
 
 ## 🎯 Perfect For
 
-- **Indie Hackers**: Ship features in hours, not weeks. No team required.
-- **AI-First Teams**: Let LLMs understand and generate features directly
+- **Indie Hackers**: Define and validate features quickly with clear specifications
+- **Development Teams**: Maintain single source of truth for feature requirements
 - **Remote Teams**: Async-friendly specifications that work across timezones
-- **Solo Founders**: Build like a team of 10 with automated generation
+- **Solo Founders**: Organize and structure your product features systematically
 
 ## 🗺️ Roadmap
 
-### Phase 1: Documentation & Specification ✅
+> **Note**: For detailed technical roadmap and CLI command specifications, see [ROADMAP.md](ROADMAP.md)
+
+### Phase 1: Foundation & Core Parser (Weeks 1-4) ✅
 - [x] Core FDML v1.3 specification
 - [x] Traceability extension (v1.3.1)
 - [x] Migration system (v1.3.2)
+- [ ] FDML Parser implementation (Rust/TypeScript)
+- [ ] Abstract Syntax Tree (AST) construction
+- [ ] Basic CLI commands (`fdml init`, `fdml validate`)
+- [ ] Error handling and user-friendly messages
+- [ ] Project architecture foundation
+
+### Phase 2: Validation & Project Structure (Weeks 5-8) 🚧
+- [ ] FDML specification validation system
+- [ ] Feature management commands (`fdml feature add`, `fdml feature list`)
+- [ ] Project directory structure creation and management
+- [ ] Integrity checking (`fdml check`)
+- [ ] Advanced error handling and diagnostics
 - [ ] Real-world examples and case studies
-- [ ] Best practices guide
 
-### Phase 2: Core Toolset 🚧
-- [ ] FDML Parser (TypeScript/Rust)
-- [ ] CLI tool for validation
-- [ ] Code generators:
-  - [ ] TypeScript/JavaScript
-  - [ ] Python
-  - [ ] Go
-- [ ] Test suite generator
-- [ ] Migration runner
+### Phase 3: LSP Foundation (Weeks 9-12) 🔮
+- [ ] Language Server Protocol architecture preparation
+- [ ] Real-time diagnostics and validation
+- [ ] FDML syntax highlighting support
+- [ ] Feature navigation (Go to Definition)
+- [ ] Basic autocomplete foundations
+- [ ] Testing and documentation
 
-### Phase 3: VS Code Extension 🔮
-- [ ] Syntax highlighting & IntelliSense
-- [ ] Real-time validation
-- [ ] Feature preview
-- [ ] One-click generation
-- [ ] Integrated debugging
+### Phase 4: VSCode Integration (Weeks 13-16) 🤖
+- [ ] VSCode extension development
+- [ ] LSP server integration
+- [ ] Advanced autocomplete and IntelliSense
+- [ ] Feature structure visualization
+- [ ] Debugging and optimization
+- [ ] Extension marketplace publishing
 
-### Phase 4: LLM-First Integration 🤖
+### Phase 5: Future Enhancements 🌍
+- [ ] LLM integration for code generation
 - [ ] AI copilot for feature writing
-- [ ] Natural language → FDML conversion
-- [ ] Smart suggestions based on existing features
-- [ ] Automated test scenario generation
-- [ ] GPT-4/Claude native support
-
-### Phase 5: Ecosystem 🌍
 - [ ] GitHub Actions integration
 - [ ] Package registry for shared features
-- [ ] Cloud playground
-- [ ] Community templates
+- [ ] Multi-language code generators (when mature)
 
 ## 🔥 Killer Features
 
@@ -141,20 +147,21 @@ Strong typing from specification to implementation. If it compiles, it works.
 ## 📊 Why FDML Will Win
 
 - **Clear Specifications**: No more "what did the PM mean by this?"
-- **Automated Generation**: Write features once, get code everywhere  
-- **Built-in Testing**: Every feature comes with tests by design
-- **AI-Ready**: LLMs can understand and extend your features
+- **Structured Validation**: Catch inconsistencies and missing requirements early
+- **Built-in Traceability**: Every feature links to business requirements
+- **Future-Ready**: Foundation for advanced tooling and automation
 
 ## 🚦 Getting Started
 
-1. **Read the Spec**: [FDML Specification v1.3](FDML-1.3-en.md)
-2. **Follow Development**: [Twitter](https://twitter.com/KolanskiNik)
+1. **Read the Spec**: [FDML Specification v1.3](FDML-1.3-en.md)  
+2. **Try the CLI**: Coming soon - `fdml init`, `fdml validate`, `fdml feature add`
+3. **Follow Development**: [Twitter](https://twitter.com/KolanskiNik)
 
 ## 💰 Build Your Competitive Moat
 
-While others are stuck in meetings debating requirements, you're shipping features. While they're fixing bugs from miscommunication, you're acquiring users.
+While others are stuck in meetings debating requirements, you have clear specifications. While they're fixing bugs from miscommunication, you have validated feature definitions.
 
-FDML isn't just a language. It's your **unfair advantage**.
+FDML isn't just a language. It's your **clarity advantage**.
 
 ## 🤝 Contributing
 
