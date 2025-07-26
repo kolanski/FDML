@@ -1,4 +1,5 @@
 *.fdml
+!examples/**/*.fdml
 
 # Rust build artifacts
 /target/
