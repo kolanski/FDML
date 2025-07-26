@@ -9,7 +9,7 @@ fn test_fdml_version() {
     cmd.arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("fdml 0.1.0"));
+        .stdout(predicate::str::contains("fdml 0.2.0"));
 }
 
 #[test]
