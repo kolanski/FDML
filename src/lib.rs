@@ -3,6 +3,8 @@ pub mod error;
 pub mod parser;
 pub mod project;
 pub mod validator;
+pub mod generators;
+pub mod migration;
 
 pub use cli::{Cli, CommandRunner};
 pub use error::{FdmlError, Result};
