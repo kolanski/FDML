@@ -1,0 +1,369 @@
+metadata:
+  version: "1.3"
+  author: "FDML Team"
+  description: "E-commerce platform specification"
+  created: "2024-01-15T00:00:00Z"
+
+system:
+  id: "ecommerce_platform"
+  name: "E-commerce Platform"
+  description: "Complete e-commerce system with user management, product catalog, and orders"
+  components:
+    - "user_service"
+    - "product_service"
+    - "order_service"
+    - "payment_service"
+  relationships:
+    - from: "order_service"
+      to: "user_service"
+      type: "dependency"
+      description: "Orders require user authentication"
+    - from: "order_service"
+      to: "product_service"
+      type: "dependency"
+      description: "Orders contain products"
+    - from: "order_service"
+      to: "payment_service"
+      type: "dependency" 
+      description: "Orders require payment processing"
+
+entities:
+  - id: user
+    name: "User"
+    description: "Registered user of the platform"
+    fields:
+      - name: id
+        type: string
+        required: true
+        description: "Unique user identifier"
+      - name: email
+        type: string
+        required: true
+        description: "User email address"
+        constraints:
+          - type: "email"
+            message: "Must be a valid email address"
+      - name: first_name
+        type: string
+        required: true
+        description: "User's first name"
+      - name: last_name
+        type: string
+        required: true
+        description: "User's last name"
+      - name: phone
+        type: string
+        required: false
+        description: "User's phone number"
+      - name: created_at
+        type: datetime
+        required: true
+        description: "Account creation timestamp"
+      - name: is_active
+        type: boolean
+        required: true
+        default: true
+        description: "Whether the account is active"
+
+  - id: product
+    name: "Product"
+    description: "Product in the catalog"
+    fields:
+      - name: id
+        type: string
+        required: true
+        description: "Unique product identifier"
+      - name: name
+        type: string
+        required: true
+        description: "Product name"
+      - name: description
+        type: string
+        required: false
+        description: "Product description"
+      - name: price
+        type: float
+        required: true
+        description: "Product price in USD"
+        constraints:
+          - type: "min_value"
+            value: 0.01
+            message: "Price must be greater than $0.00"
+      - name: category_id
+        type: string
+        required: true
+        description: "Product category"
+      - name: stock_quantity
+        type: int
+        required: true
+        default: 0
+        description: "Available stock quantity"
+      - name: is_available
+        type: boolean
+        required: true
+        default: true
+        description: "Whether product is available for purchase"
+      - name: created_at
+        type: datetime
+        required: true
+        description: "Product creation timestamp"
+
+  - id: order
+    name: "Order"
+    description: "Customer order"
+    fields:
+      - name: id
+        type: string
+        required: true
+        description: "Unique order identifier"
+      - name: user_id
+        type: string
+        required: true
+        description: "ID of the user who placed the order"
+      - name: status
+        type: string
+        required: true
+        default: "pending"
+        description: "Order status"
+        constraints:
+          - type: "enum"
+            value: ["pending", "confirmed", "shipped", "delivered", "cancelled"]
+      - name: total_amount
+        type: float
+        required: true
+        description: "Total order amount"
+        constraints:
+          - type: "min_value"
+            value: 0.01
+      - name: created_at
+        type: datetime
+        required: true
+        description: "Order creation timestamp"
+      - name: shipping_address
+        type: string
+        required: true
+        description: "Shipping address"
+
+  - id: order_item
+    name: "OrderItem"
+    description: "Individual item within an order"
+    fields:
+      - name: id
+        type: string
+        required: true
+      - name: order_id
+        type: string
+        required: true
+        description: "Reference to the order"
+      - name: product_id
+        type: string
+        required: true
+        description: "Reference to the product"
+      - name: quantity
+        type: int
+        required: true
+        description: "Quantity ordered"
+        constraints:
+          - type: "min_value"
+            value: 1
+      - name: unit_price
+        type: float
+        required: true
+        description: "Price per unit at time of order"
+
+actions:
+  - id: create_user
+    name: "Create User"
+    description: "Register a new user"
+    input:
+      entity: user
+      fields: ["email", "first_name", "last_name", "phone"]
+    output:
+      entity: user
+    preconditions:
+      - "Email must be unique"
+    postconditions:
+      - "User is created with active status"
+      - "Welcome email is sent"
+
+  - id: get_user
+    name: "Get User"
+    description: "Retrieve user by ID"
+    input:
+      fields: ["id"]
+    output:
+      entity: user
+
+  - id: list_products
+    name: "List Products"
+    description: "Get paginated list of available products"
+    input:
+      fields: ["page", "limit", "category_id?"]
+    output:
+      entity: product
+
+  - id: get_product
+    name: "Get Product"
+    description: "Retrieve product details by ID"
+    input:
+      fields: ["id"]
+    output:
+      entity: product
+
+  - id: create_order
+    name: "Create Order"
+    description: "Place a new order"
+    input:
+      entity: order
+      fields: ["user_id", "shipping_address"]
+    output:
+      entity: order
+    preconditions:
+      - "User must be authenticated"
+      - "Cart must not be empty"
+      - "All products must be available"
+    postconditions:
+      - "Order is created with pending status"
+      - "Product stock is reserved"
+      - "Order confirmation email is sent"
+
+  - id: update_order_status
+    name: "Update Order Status"
+    description: "Update the status of an existing order"
+    input:
+      fields: ["order_id", "status"]
+    output:
+      entity: order
+    preconditions:
+      - "Order must exist"
+      - "Status transition must be valid"
+    postconditions:
+      - "Order status is updated"
+      - "Status change notification is sent"
+
+features:
+  - id: user_registration
+    title: "User Registration"
+    description: "Users can create accounts on the platform"
+    scenarios:
+      - id: successful_registration
+        title: "Successful user registration"
+        description: "User provides valid information and creates account"
+        given:
+          - "the registration page is loaded"
+          - "the user is not already registered"
+        when:
+          - "user enters valid email 'john@example.com'"
+          - "user enters first name 'John'"
+          - "user enters last name 'Doe'"
+          - "user submits the registration form"
+        then:
+          - "a new user account is created"
+          - "user receives a welcome email"
+          - "user is redirected to the dashboard"
+
+  - id: product_catalog
+    title: "Product Catalog"
+    description: "Users can browse and search products"
+    scenarios:
+      - id: browse_products
+        title: "Browse product catalog"
+        given:
+          - "there are products in the catalog"
+        when:
+          - "user visits the products page"
+        then:
+          - "user sees a list of available products"
+          - "each product shows name, price, and image"
+          - "products are paginated"
+
+  - id: order_management
+    title: "Order Management"
+    description: "Users can place and track orders"
+    scenarios:
+      - id: place_order
+        title: "Successfully place an order"
+        given:
+          - "user is logged in"
+          - "user has items in cart"
+          - "all items are in stock"
+        when:
+          - "user provides shipping address"
+          - "user confirms the order"
+        then:
+          - "order is created with pending status"
+          - "user receives order confirmation email"
+          - "product stock is decremented"
+
+flows:
+  - id: order_fulfillment
+    name: "Order Fulfillment Process"
+    description: "Complete flow from order placement to delivery"
+    steps:
+      - id: validate_order
+        action: "validate_order_details"
+        description: "Validate order details and inventory"
+      - id: process_payment
+        action: "process_payment"
+        description: "Process customer payment"
+        conditions: ["validate_order.success"]
+      - id: update_inventory
+        action: "update_product_stock"
+        description: "Update product inventory"
+        conditions: ["process_payment.success"]
+      - id: create_shipment
+        action: "create_shipment"
+        description: "Create shipping label and arrange pickup"
+        conditions: ["update_inventory.success"]
+      - id: notify_customer
+        action: "send_shipping_notification"
+        description: "Notify customer of shipment"
+        conditions: ["create_shipment.success"]
+
+constraints:
+  - id: unique_user_email
+    name: "Unique User Email"
+    description: "Each user must have a unique email address"
+    type: "uniqueness"
+    rule: "user.email must be unique across all users"
+    entities: ["user"]
+
+  - id: positive_product_price
+    name: "Positive Product Price"
+    description: "Product prices must be positive"
+    type: "validation"
+    rule: "product.price > 0"
+    entities: ["product"]
+
+  - id: valid_order_status_transitions
+    name: "Valid Order Status Transitions"
+    description: "Orders can only transition between valid statuses"
+    type: "state_machine"
+    rule: "order.status transitions: pending -> confirmed -> shipped -> delivered"
+    entities: ["order"]
+
+traceability:
+  - from: "user_registration"
+    to: "create_user"
+    relation: "implements"
+    description: "User registration feature is implemented by create_user action"
+
+  - from: "create_user"
+    to: "user"
+    relation: "operates_on"
+    description: "Create user action operates on user entity"
+
+  - from: "product_catalog"
+    to: "list_products"
+    relation: "implements"
+    description: "Product catalog feature is implemented by list_products action"
+
+  - from: "order_management"
+    to: "create_order"
+    relation: "implements"
+    description: "Order management feature is implemented by create_order action"
+
+  - from: "create_order"
+    to: "order"
+    relation: "creates"
+    description: "Create order action creates order entities"

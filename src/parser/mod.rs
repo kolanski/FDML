@@ -17,12 +17,7 @@ pub fn parse_fdml(content: &str) -> Result<FdmlDocument> {
 
 /// Parse FDML content from YAML (for compatibility)
 pub fn parse_fdml_yaml(content: &str) -> Result<FdmlDocument> {
-    // Try YAML parsing first for simpler cases
-    match serde_yaml::from_str::<FdmlDocument>(content) {
-        Ok(doc) => Ok(doc),
-        Err(_) => {
-            // Fall back to custom parser
-            parse_fdml(content)
-        }
-    }
+    // Use YAML parsing directly
+    serde_yaml::from_str::<FdmlDocument>(content)
+        .map_err(|e| crate::error::FdmlError::simple_parser_error(format!("YAML parsing failed: {}", e)))
 }
