@@ -1,0 +1,28 @@
+[package]
+name = "fdml"
+version = "0.1.0"
+edition = "2021"
+description = "FDML (Feature-Driven Modeling Language) CLI tools"
+authors = ["FDML Contributors"]
+license = "MIT"
+repository = "https://github.com/kolanski/FDML"
+keywords = ["fdml", "cli", "parser", "modeling", "features"]
+categories = ["command-line-utilities", "parser-implementations"]
+
+[[bin]]
+name = "fdml"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+anyhow = "1.0"
+colored = "2.0"
+thiserror = "1.0"
+
+[dev-dependencies]
+tempfile = "3.0"
+assert_cmd = "2.0"
+predicates = "3.0"
