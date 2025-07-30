@@ -74,6 +74,7 @@ From this, FDML generates everything. No ambiguity. No telephone game. Just feat
 - [x] Core FDML v1.3 specification
 - [x] Traceability extension (v1.3.1)
 - [x] Migration system (v1.3.2)
+- [x] System design principles integration (v1.3.3)
 - [ ] FDML Parser implementation (Rust/TypeScript)
 - [ ] Abstract Syntax Tree (AST) construction
 - [ ] Basic CLI commands (`fdml init`, `fdml validate`)
@@ -144,16 +145,36 @@ LLMs can read and write FDML natively. Your AI coding assistant becomes a featur
 ### 4. **Type-Safe by Default**
 Strong typing from specification to implementation. If it compiles, it works.
 
+### 5. **System Design Principles Built-In** (New in v1.3.3)
+Integrate proven architectural patterns directly into your specifications. No more guessing how to implement features efficiently.
+
+```yaml
+system:
+  id: payment_system
+  design_principles:
+    efficiency: [Sc, Op]     # Scalable, Optimistic design
+    reliability: [Ft, At]    # Fault Tolerant, Atomic operations
+    security: [Lp, Ac]       # Least Privilege, Access Control
+  
+  implementation_strategies:
+    - principle: Op  # Optimistic Design
+      strategy: "Process payments optimistically, handle failures async"
+    - principle: Ft  # Fault Tolerance
+      strategy: "Circuit breaker with exponential backoff"
+```
+
 ## 📊 Why FDML Will Win
 
 - **Clear Specifications**: No more "what did the PM mean by this?"
 - **Structured Validation**: Catch inconsistencies and missing requirements early
 - **Built-in Traceability**: Every feature links to business requirements
+- **Architectural Guidance**: 40+ proven design principles guide implementation
 - **Future-Ready**: Foundation for advanced tooling and automation
 
 ## 🚦 Getting Started
 
-1. **Read the Spec**: [FDML Specification v1.3](FDML-1.3-en.md)  
+1. **Read the Spec**: [FDML Specification v1.3](FDML-1.3-en.md)
+   - Including new [System Design Principles Extension (v1.3.3)](fmdl-spec/FDML-1.3.3-extension-en.md)
 2. **Try the CLI**: Coming soon - `fdml init`, `fdml validate`, `fdml feature add`
 3. **Follow Development**: [Twitter](https://twitter.com/KolanskiNik)
 
