@@ -2,8 +2,9 @@
 
 > Transform vibes into features. Ship code that matters.
 
-[![Version](https://img.shields.io/badge/version-1.3-blue.svg)](https://github.com/yourusername/fdml)
+[![Version](https://img.shields.io/badge/version-1.3-blue.svg)](https://github.com/kolanski/FDML)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-27%2F27%20passing-brightgreen.svg)](https://github.com/kolanski/FDML)
 [![Indie Hacker Approved](https://img.shields.io/badge/Indie%20Hacker-Approved-orange.svg)](https://www.indiehackers.com)
 
 ## 🚀 What is FDML?
