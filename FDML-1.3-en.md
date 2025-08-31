@@ -683,5 +683,6 @@ It is focused on maximum readability, executability, and interdisciplinary colla
 The specification includes core version 1.3, as well as extensions:
 - 1.3.1 — traceability mechanism through external metadata
 - 1.3.2 — migration mechanism for model change management
+- 1.3.3 — system design principles integration for architectural guidance
 
-These extensions provide complete development lifecycle support, from requirements to implementation and maintenance.
+These extensions provide complete development lifecycle support, from requirements to implementation and maintenance, with explicit design rationale and proven architectural patterns.

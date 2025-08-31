@@ -147,6 +147,24 @@ LLMs can read and write FDML natively. Your AI coding assistant becomes a featur
 ### 4. **Type-Safe by Default**
 Strong typing from specification to implementation. If it compiles, it works.
 
+### 5. **System Design Principles Built-In** (New in v1.3.3)
+Integrate proven architectural patterns directly into your specifications. No more guessing how to implement features efficiently.
+
+```yaml
+system:
+  id: payment_system
+  design_principles:
+    efficiency: [Sc, Op]     # Scalable, Optimistic design
+    reliability: [Ft, At]    # Fault Tolerant, Atomic operations
+    security: [Lp, Ac]       # Least Privilege, Access Control
+  
+  implementation_strategies:
+    - principle: Op  # Optimistic Design
+      strategy: "Process payments optimistically, handle failures async"
+    - principle: Ft  # Fault Tolerance
+      strategy: "Circuit breaker with exponential backoff"
+```
+
 ## 📊 Why FDML Will Win
 
 - **Clear Specifications**: No more "what did the PM mean by this?"
