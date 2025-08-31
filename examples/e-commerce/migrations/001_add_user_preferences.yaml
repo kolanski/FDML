@@ -1,0 +1,29 @@
+id: "2024_01_15_add_user_preferences"
+title: "Add User Preferences"
+description: "Add user preference settings and notification options"
+up:
+  - type: "add_field"
+    entity_id: "user"
+    field_name: "preferences"
+    field_type: "string"
+    required: false
+    default: "{}"
+  - type: "add_field"
+    entity_id: "user"
+    field_name: "email_notifications"
+    field_type: "boolean"
+    required: true
+    default: true
+  - type: "add_feature"
+    id: "user_preferences"
+    title: "User Preferences Management"
+    description: "Users can manage their account preferences and notification settings"
+down:
+  - type: "remove_feature"
+    id: "user_preferences"
+  - type: "remove_field"
+    entity_id: "user"
+    field_name: "email_notifications"
+  - type: "remove_field"
+    entity_id: "user"
+    field_name: "preferences"

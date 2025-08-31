@@ -1,0 +1,30 @@
+id: "2024_01_16_add_product_reviews"
+title: "Add Product Reviews"
+description: "Add product review and rating functionality"
+dependencies: ["2024_01_15_add_user_preferences"]
+up:
+  - type: "add_field"
+    entity_id: "product"
+    field_name: "average_rating"
+    field_type: "float"
+    required: false
+    default: 0.0
+  - type: "add_field"
+    entity_id: "product"
+    field_name: "review_count"
+    field_type: "int"
+    required: false
+    default: 0
+  - type: "add_feature"
+    id: "product_reviews"
+    title: "Product Reviews"
+    description: "Customers can review and rate products"
+down:
+  - type: "remove_feature"
+    id: "product_reviews"
+  - type: "remove_field"
+    entity_id: "product"
+    field_name: "review_count"
+  - type: "remove_field"
+    entity_id: "product"
+    field_name: "average_rating"
