@@ -224,6 +224,19 @@ The FDML CLI provides a comprehensive toolset for working with FDML specificatio
 - `--output <dir>` - Specify output directory
 - `--template <dir>` - Use custom templates
 
+**Direct Entity Management:**
+- `fdml add feature <id> --title "Title" [--description "desc"] [--target file.fdml]`
+- `fdml add entity <id> --name "Name" [--description "desc"] [--target file.fdml]`
+- `fdml add action <id> --name "Name" [--description "desc"] [--target file.fdml]`
+- `fdml add constraint <id> --name "Name" --condition "rule" --applies-to "target" [--target file.fdml]`
+- `fdml add field <entity_id> <field_name> --field-type <type> [--required] [--default value] [--target file.fdml]`
+
+**List Operations:**
+- `fdml list features [--target file.fdml]` - List all features in specification
+- `fdml list entities [--target file.fdml]` - List all entities in specification  
+- `fdml list actions [--target file.fdml]` - List all actions in specification
+- `fdml list constraints [--target file.fdml]` - List all constraints in specification
+
 **Migration System:**
 - `fdml migrate apply --path <dir>` - Apply pending migrations
 - `fdml migrate rollback --count <n> --path <dir>` - Rollback migrations
@@ -233,6 +246,45 @@ The FDML CLI provides a comprehensive toolset for working with FDML specificatio
 - `fdml trace validate` - Validate traceability links (framework ready)
 - `fdml trace graph` - Generate dependency graphs (framework ready)
 - `fdml trace matrix` - Generate traceability matrices (framework ready)
+
+#### 📝 Usage Examples
+
+**Direct Entity Management Examples:**
+
+```bash
+# Add a new feature
+fdml add feature user_auth --title "User Authentication" --description "Login and registration system" --target app.fdml
+
+# Add a new entity
+fdml add entity user --name "User" --description "User account entity" --target app.fdml
+
+# Add fields to the entity
+fdml add field user email --field-type string --required --target app.fdml
+fdml add field user name --field-type string --default "Anonymous" --target app.fdml
+fdml add field user age --field-type integer --target app.fdml
+
+# Add an action
+fdml add action login --name "User Login" --description "Authenticate user credentials" --target app.fdml
+
+# Add a constraint
+fdml add constraint email_unique --name "Email Uniqueness" --condition "unique(email)" --applies-to "user.email" --description "Email addresses must be unique" --target app.fdml
+
+# List entities and their details
+fdml list entities --target app.fdml
+fdml list features --target app.fdml
+fdml list actions --target app.fdml
+fdml list constraints --target app.fdml
+```
+
+**Working with Default Files:**
+
+```bash
+# Commands automatically find FDML files in current directory
+# (searches for spec.fdml, main.fdml, app.fdml, or any .fdml file)
+fdml add entity product --name "Product"
+fdml list entities
+fdml validate .
+```
 
 ### 🎯 Real-World Example
 

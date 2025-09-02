@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "fdml",
     about = "FDML (Feature-Driven Modeling Language) CLI tools",
+    long_about = "FDML CLI provides tools for parsing, validating, generating code, and managing FDML specifications.\n\nExamples:\n  fdml init my-project\n  fdml add entity user --name \"User\" --target app.fdml\n  fdml generate app.fdml --language typescript --with-tests\n  fdml list entities --target app.fdml",
     version = env!("CARGO_PKG_VERSION"),
     author = "FDML Contributors"
 )]
@@ -79,12 +80,20 @@ pub enum Commands {
     },
     
     /// Add FDML entities directly to specification files
+    #[command(
+        about = "Add FDML entities directly to specification files",
+        long_about = "Add features, entities, actions, constraints, and fields directly to FDML files.\n\nExamples:\n  fdml add entity user --name \"User\" --target app.fdml\n  fdml add field user email --field-type string --required\n  fdml add action login --name \"User Login\" --description \"Authenticate user\""
+    )]
     Add {
         #[command(subcommand)]
         operation: AddCommands,
     },
     
     /// List FDML entities from specification files
+    #[command(
+        about = "List FDML entities from specification files", 
+        long_about = "List and display information about features, entities, actions, and constraints.\n\nExamples:\n  fdml list entities --target app.fdml\n  fdml list features\n  fdml list actions --target spec.fdml"
+    )]
     List {
         #[command(subcommand)]
         operation: ListCommands,
@@ -196,90 +205,110 @@ impl Cli {
 #[derive(Subcommand)]
 pub enum AddCommands {
     /// Add a new feature
+    #[command(
+        about = "Add a new feature to FDML specification",
+        long_about = "Add a new feature with title and optional description.\n\nExample:\n  fdml add feature user_auth --title \"User Authentication\" --description \"Login system\" --target app.fdml"
+    )]
     Feature {
-        /// Feature ID
+        /// Feature ID (unique identifier)
         id: String,
         
-        /// Feature title
+        /// Feature title (human-readable name)
         #[arg(long)]
         title: String,
         
-        /// Feature description
+        /// Feature description (optional)
         #[arg(long)]
         description: Option<String>,
         
-        /// Target FDML file to modify
+        /// Target FDML file to modify (auto-detected if not specified)
         #[arg(short, long)]
         target: Option<String>,
     },
     
     /// Add a new entity
+    #[command(
+        about = "Add a new entity to FDML specification", 
+        long_about = "Add a new entity with name and optional description.\n\nExample:\n  fdml add entity user --name \"User\" --description \"User account data\" --target app.fdml"
+    )]
     Entity {
-        /// Entity ID
+        /// Entity ID (unique identifier)
         id: String,
         
-        /// Entity name
+        /// Entity name (human-readable name)
         #[arg(long)]
         name: String,
         
-        /// Entity description
+        /// Entity description (optional)
         #[arg(long)]
         description: Option<String>,
         
-        /// Target FDML file to modify
+        /// Target FDML file to modify (auto-detected if not specified)
         #[arg(short, long)]
         target: Option<String>,
     },
     
     /// Add a new action
+    #[command(
+        about = "Add a new action to FDML specification",
+        long_about = "Add a new action with name and optional description.\n\nExample:\n  fdml add action login --name \"User Login\" --description \"Authenticate user credentials\" --target app.fdml"
+    )]
     Action {
-        /// Action ID
+        /// Action ID (unique identifier)
         id: String,
         
-        /// Action name
+        /// Action name (human-readable name)
         #[arg(long)]
         name: String,
         
-        /// Action description
+        /// Action description (optional)
         #[arg(long)]
         description: Option<String>,
         
-        /// Target FDML file to modify
+        /// Target FDML file to modify (auto-detected if not specified)
         #[arg(short, long)]
         target: Option<String>,
     },
     
     /// Add a new constraint
+    #[command(
+        about = "Add a new constraint to FDML specification",
+        long_about = "Add a new business constraint with condition and target.\n\nExample:\n  fdml add constraint email_unique --name \"Email Uniqueness\" --condition \"unique(email)\" --applies-to \"user.email\" --target app.fdml"
+    )]
     Constraint {
-        /// Constraint ID
+        /// Constraint ID (unique identifier)
         id: String,
         
-        /// Constraint name
+        /// Constraint name (human-readable name)
         #[arg(long)]
         name: String,
         
-        /// Constraint condition/rule
+        /// Constraint condition/rule (e.g., \"unique(email)\", \"min_length(8)\")
         #[arg(long)]
         condition: String,
         
-        /// What the constraint applies to
+        /// What the constraint applies to (e.g., \"user.email\", \"product.price\")
         #[arg(long)]
         applies_to: String,
         
-        /// Constraint description
+        /// Constraint description (optional)
         #[arg(long)]
         description: Option<String>,
         
-        /// Error message for constraint violations
+        /// Error message for constraint violations (optional)
         #[arg(long)]
         message: Option<String>,
         
-        /// Target FDML file to modify
+        /// Target FDML file to modify (auto-detected if not specified)
         #[arg(short, long)]
         target: Option<String>,
     },
     
     /// Add a field to an entity
+    #[command(
+        about = "Add a field to an existing entity",
+        long_about = "Add a new field to an existing entity with type and optional constraints.\n\nExamples:\n  fdml add field user email --field-type string --required --target app.fdml\n  fdml add field user age --field-type integer --default \"18\""
+    )]
     Field {
         /// Entity ID to add field to
         entity_id: String,
@@ -287,19 +316,19 @@ pub enum AddCommands {
         /// Field name
         field_name: String,
         
-        /// Field type
+        /// Field type (string, integer, float, boolean, etc.)
         #[arg(long)]
         field_type: String,
         
-        /// Whether field is required
+        /// Whether field is required (flag, default: false)
         #[arg(long)]
         required: bool,
         
-        /// Default value for field
+        /// Default value for field (optional)
         #[arg(long)]
         default: Option<String>,
         
-        /// Target FDML file to modify
+        /// Target FDML file to modify (auto-detected if not specified)
         #[arg(short, long)]
         target: Option<String>,
     },
@@ -308,29 +337,45 @@ pub enum AddCommands {
 #[derive(Subcommand)]
 pub enum ListCommands {
     /// List all features
+    #[command(
+        about = "List all features in FDML specification",
+        long_about = "Display all features with their titles, descriptions, and scenario counts.\n\nExample:\n  fdml list features --target app.fdml"
+    )]
     Features {
-        /// Target FDML file to read from
+        /// Target FDML file to read from (auto-detected if not specified)
         #[arg(short, long)]
         target: Option<String>,
     },
     
     /// List all entities
+    #[command(
+        about = "List all entities in FDML specification",
+        long_about = "Display all entities with their names, descriptions, and field counts.\n\nExample:\n  fdml list entities --target app.fdml"
+    )]
     Entities {
-        /// Target FDML file to read from
+        /// Target FDML file to read from (auto-detected if not specified)
         #[arg(short, long)]
         target: Option<String>,
     },
     
     /// List all actions
+    #[command(
+        about = "List all actions in FDML specification",
+        long_about = "Display all actions with their names and descriptions.\n\nExample:\n  fdml list actions --target app.fdml"
+    )]
     Actions {
-        /// Target FDML file to read from
+        /// Target FDML file to read from (auto-detected if not specified)
         #[arg(short, long)]
         target: Option<String>,
     },
     
     /// List all constraints
+    #[command(
+        about = "List all constraints in FDML specification",
+        long_about = "Display all constraints with their names, rules, and descriptions.\n\nExample:\n  fdml list constraints --target app.fdml"
+    )]
     Constraints {
-        /// Target FDML file to read from
+        /// Target FDML file to read from (auto-detected if not specified)
         #[arg(short, long)]
         target: Option<String>,
     },
