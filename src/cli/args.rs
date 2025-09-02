@@ -78,6 +78,18 @@ pub enum Commands {
         with_tests: bool,
     },
     
+    /// Add FDML entities directly to specification files
+    Add {
+        #[command(subcommand)]
+        operation: AddCommands,
+    },
+    
+    /// List FDML entities from specification files
+    List {
+        #[command(subcommand)]
+        operation: ListCommands,
+    },
+    
     /// Run migration operations
     Migrate {
         #[command(subcommand)]
@@ -179,4 +191,147 @@ impl Cli {
     pub fn parse_args() -> Self {
         Self::parse()
     }
+}
+
+#[derive(Subcommand)]
+pub enum AddCommands {
+    /// Add a new feature
+    Feature {
+        /// Feature ID
+        id: String,
+        
+        /// Feature title
+        #[arg(long)]
+        title: String,
+        
+        /// Feature description
+        #[arg(long)]
+        description: Option<String>,
+        
+        /// Target FDML file to modify
+        #[arg(short, long)]
+        target: Option<String>,
+    },
+    
+    /// Add a new entity
+    Entity {
+        /// Entity ID
+        id: String,
+        
+        /// Entity name
+        #[arg(long)]
+        name: String,
+        
+        /// Entity description
+        #[arg(long)]
+        description: Option<String>,
+        
+        /// Target FDML file to modify
+        #[arg(short, long)]
+        target: Option<String>,
+    },
+    
+    /// Add a new action
+    Action {
+        /// Action ID
+        id: String,
+        
+        /// Action name
+        #[arg(long)]
+        name: String,
+        
+        /// Action description
+        #[arg(long)]
+        description: Option<String>,
+        
+        /// Target FDML file to modify
+        #[arg(short, long)]
+        target: Option<String>,
+    },
+    
+    /// Add a new constraint
+    Constraint {
+        /// Constraint ID
+        id: String,
+        
+        /// Constraint name
+        #[arg(long)]
+        name: String,
+        
+        /// Constraint condition/rule
+        #[arg(long)]
+        condition: String,
+        
+        /// What the constraint applies to
+        #[arg(long)]
+        applies_to: String,
+        
+        /// Constraint description
+        #[arg(long)]
+        description: Option<String>,
+        
+        /// Error message for constraint violations
+        #[arg(long)]
+        message: Option<String>,
+        
+        /// Target FDML file to modify
+        #[arg(short, long)]
+        target: Option<String>,
+    },
+    
+    /// Add a field to an entity
+    Field {
+        /// Entity ID to add field to
+        entity_id: String,
+        
+        /// Field name
+        field_name: String,
+        
+        /// Field type
+        #[arg(long)]
+        field_type: String,
+        
+        /// Whether field is required
+        #[arg(long)]
+        required: bool,
+        
+        /// Default value for field
+        #[arg(long)]
+        default: Option<String>,
+        
+        /// Target FDML file to modify
+        #[arg(short, long)]
+        target: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ListCommands {
+    /// List all features
+    Features {
+        /// Target FDML file to read from
+        #[arg(short, long)]
+        target: Option<String>,
+    },
+    
+    /// List all entities
+    Entities {
+        /// Target FDML file to read from
+        #[arg(short, long)]
+        target: Option<String>,
+    },
+    
+    /// List all actions
+    Actions {
+        /// Target FDML file to read from
+        #[arg(short, long)]
+        target: Option<String>,
+    },
+    
+    /// List all constraints
+    Constraints {
+        /// Target FDML file to read from
+        #[arg(short, long)]
+        target: Option<String>,
+    },
 }

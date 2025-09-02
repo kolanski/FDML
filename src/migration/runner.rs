@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use crate::error::Result;
 use crate::parser::{parse_fdml_yaml};
-use crate::parser::ast::{FdmlDocument, Feature, Scenario, Field, Value};
+use crate::parser::ast::{FdmlDocument, Feature, Scenario, Field, Value, Entity, Action, Constraint};
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,10 +31,43 @@ pub enum MigrationOperation {
     RemoveFeature {
         id: String,
     },
+    #[serde(rename = "add_entity")]
+    AddEntity {
+        id: String,
+        name: String,
+        description: Option<String>,
+    },
+    #[serde(rename = "remove_entity")]
+    RemoveEntity {
+        id: String,
+    },
     #[serde(rename = "modify_entity")]
     ModifyEntity {
         id: String,
         changes: EntityChanges,
+    },
+    #[serde(rename = "add_action")]
+    AddAction {
+        id: String,
+        name: String,
+        description: Option<String>,
+    },
+    #[serde(rename = "remove_action")]
+    RemoveAction {
+        id: String,
+    },
+    #[serde(rename = "add_constraint")]
+    AddConstraint {
+        id: String,
+        name: String,
+        description: Option<String>,
+        condition: String,
+        applies_to: String,
+        message: Option<String>,
+    },
+    #[serde(rename = "remove_constraint")]
+    RemoveConstraint {
+        id: String,
     },
     #[serde(rename = "add_field")]
     AddField {
@@ -479,11 +512,29 @@ impl MigrationRunner {
             MigrationOperation::RemoveFeature { id } => {
                 println!("    - Remove feature: {}", id);
             },
+            MigrationOperation::AddEntity { id, name, .. } => {
+                println!("    + Add entity: {} ({})", id, name);
+            },
+            MigrationOperation::RemoveEntity { id } => {
+                println!("    - Remove entity: {}", id);
+            },
             MigrationOperation::ModifyEntity { id, changes } => {
                 println!("    ~ Modify entity: {}", id);
                 if let Some(name) = &changes.name {
                     println!("      - Change name to: {}", name);
                 }
+            },
+            MigrationOperation::AddAction { id, name, .. } => {
+                println!("    + Add action: {} ({})", id, name);
+            },
+            MigrationOperation::RemoveAction { id } => {
+                println!("    - Remove action: {}", id);
+            },
+            MigrationOperation::AddConstraint { id, name, condition, applies_to, .. } => {
+                println!("    + Add constraint: {} ({}) - {} applies to {}", id, name, condition, applies_to);
+            },
+            MigrationOperation::RemoveConstraint { id } => {
+                println!("    - Remove constraint: {}", id);
             },
             MigrationOperation::AddField { entity_id, field_name, field_type, .. } => {
                 println!("    + Add field '{}' ({}) to entity '{}'", field_name, field_type, entity_id);
@@ -517,6 +568,48 @@ impl MigrationRunner {
                 if id.trim().is_empty() {
                     return Err(crate::error::FdmlError::migration_error(
                         "RemoveFeature operation requires non-empty id".to_string()
+                    ));
+                }
+            },
+            MigrationOperation::AddEntity { id, name, .. } => {
+                if id.trim().is_empty() || name.trim().is_empty() {
+                    return Err(crate::error::FdmlError::migration_error(
+                        "AddEntity operation requires non-empty id and name".to_string()
+                    ));
+                }
+            },
+            MigrationOperation::RemoveEntity { id } => {
+                if id.trim().is_empty() {
+                    return Err(crate::error::FdmlError::migration_error(
+                        "RemoveEntity operation requires non-empty id".to_string()
+                    ));
+                }
+            },
+            MigrationOperation::AddAction { id, name, .. } => {
+                if id.trim().is_empty() || name.trim().is_empty() {
+                    return Err(crate::error::FdmlError::migration_error(
+                        "AddAction operation requires non-empty id and name".to_string()
+                    ));
+                }
+            },
+            MigrationOperation::RemoveAction { id } => {
+                if id.trim().is_empty() {
+                    return Err(crate::error::FdmlError::migration_error(
+                        "RemoveAction operation requires non-empty id".to_string()
+                    ));
+                }
+            },
+            MigrationOperation::AddConstraint { id, name, condition, applies_to, .. } => {
+                if id.trim().is_empty() || name.trim().is_empty() || condition.trim().is_empty() || applies_to.trim().is_empty() {
+                    return Err(crate::error::FdmlError::migration_error(
+                        "AddConstraint operation requires non-empty id, name, condition, and applies_to".to_string()
+                    ));
+                }
+            },
+            MigrationOperation::RemoveConstraint { id } => {
+                if id.trim().is_empty() {
+                    return Err(crate::error::FdmlError::migration_error(
+                        "RemoveConstraint operation requires non-empty id".to_string()
                     ));
                 }
             },
@@ -573,6 +666,25 @@ impl MigrationRunner {
                 println!("  - Removing feature: {}", id);
                 document.features.retain(|f| f.id != *id);
             },
+
+            MigrationOperation::AddEntity { id, name, description } => {
+                println!("  + Adding entity: {} - {}", id, name);
+                
+                let entity = Entity {
+                    id: id.clone(),
+                    name: Some(name.clone()),
+                    description: description.clone(),
+                    fields: Vec::new(),
+                    relationships: None,
+                };
+                
+                document.entities.push(entity);
+            },
+            
+            MigrationOperation::RemoveEntity { id } => {
+                println!("  - Removing entity: {}", id);
+                document.entities.retain(|e| e.id != *id);
+            },
             
             MigrationOperation::ModifyEntity { id, changes } => {
                 println!("  ~ Modifying entity: {}", id);
@@ -591,6 +703,54 @@ impl MigrationRunner {
                         "Entity '{}' not found", id
                     )));
                 }
+            },
+
+            MigrationOperation::AddAction { id, name, description } => {
+                println!("  + Adding action: {} - {}", id, name);
+                
+                let action = Action {
+                    id: id.clone(),
+                    name: Some(name.clone()),
+                    description: description.clone(),
+                    input: None,
+                    output: None,
+                    side_effects: None,
+                    preconditions: None,
+                    postconditions: None,
+                };
+                
+                document.actions.push(action);
+            },
+            
+            MigrationOperation::RemoveAction { id } => {
+                println!("  - Removing action: {}", id);
+                document.actions.retain(|a| a.id != *id);
+            },
+
+            MigrationOperation::AddConstraint { id, name, description, condition, applies_to, message } => {
+                println!("  + Adding constraint: {} - {}", id, name);
+                
+                let constraint = Constraint {
+                    id: id.clone(),
+                    name: name.clone(),
+                    description: description.clone(),
+                    constraint_type: "rule".to_string(),
+                    rule: condition.clone(),
+                    entities: None,
+                    actions: None,
+                };
+                
+                document.constraints.push(constraint);
+                println!("    - Condition: {}", condition);
+                println!("    - Applies to: {}", applies_to);
+                if let Some(msg) = message {
+                    println!("    - Message: {}", msg);
+                }
+            },
+            
+            MigrationOperation::RemoveConstraint { id } => {
+                println!("  - Removing constraint: {}", id);
+                document.constraints.retain(|c| c.id != *id);
             },
             
             MigrationOperation::AddField { entity_id, field_name, field_type, required, default } => {
