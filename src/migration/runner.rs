@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use crate::error::Result;
 use crate::parser::{parse_fdml_yaml};
-use crate::parser::ast::{FdmlDocument, Feature, Scenario, Field, Value};
+use crate::parser::ast::{FdmlDocument, Feature, Scenario, Field, Value, Entity, Action, ActionData, Constraint};
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,10 +31,25 @@ pub enum MigrationOperation {
     RemoveFeature {
         id: String,
     },
+    #[serde(rename = "add_entity")]
+    AddEntity {
+        id: String,
+        name: Option<String>,
+        description: Option<String>,
+        fields: Option<Vec<String>>,
+    },
     #[serde(rename = "modify_entity")]
     ModifyEntity {
         id: String,
         changes: EntityChanges,
+    },
+    #[serde(rename = "add_action")]
+    AddAction {
+        id: String,
+        name: Option<String>,
+        description: Option<String>,
+        input: Option<String>,
+        output: Option<String>,
     },
     #[serde(rename = "add_field")]
     AddField {
@@ -53,6 +68,13 @@ pub enum MigrationOperation {
     UpdateAction {
         id: String,
         changes: ActionChanges,
+    },
+    #[serde(rename = "add_constraint")]
+    AddConstraint {
+        id: String,
+        description: Option<String>,
+        constraint_type: String,
+        target: String,
     },
     #[serde(rename = "change_validation")]
     ChangeValidation {
@@ -500,6 +522,15 @@ impl MigrationRunner {
             MigrationOperation::ChangeValidation { target_id, target_type, .. } => {
                 println!("    ~ Change validation for {} ({})", target_id, target_type);
             },
+            MigrationOperation::AddEntity { id, name, .. } => {
+                println!("    + Add entity: {} ({})", id, name.as_ref().unwrap_or(&"No name".to_string()));
+            },
+            MigrationOperation::AddAction { id, name, .. } => {
+                println!("    + Add action: {} ({})", id, name.as_ref().unwrap_or(&"No name".to_string()));
+            },
+            MigrationOperation::AddConstraint { id, constraint_type, target, .. } => {
+                println!("    + Add constraint: {} ({}) for {}", id, constraint_type, target);
+            },
         }
     }
 
@@ -531,6 +562,27 @@ impl MigrationRunner {
                 if entity_id.trim().is_empty() || field_name.trim().is_empty() {
                     return Err(crate::error::FdmlError::migration_error(
                         "RemoveField operation requires non-empty entity_id and field_name".to_string()
+                    ));
+                }
+            },
+            MigrationOperation::AddEntity { id, .. } => {
+                if id.trim().is_empty() {
+                    return Err(crate::error::FdmlError::migration_error(
+                        "AddEntity operation requires non-empty id".to_string()
+                    ));
+                }
+            },
+            MigrationOperation::AddAction { id, .. } => {
+                if id.trim().is_empty() {
+                    return Err(crate::error::FdmlError::migration_error(
+                        "AddAction operation requires non-empty id".to_string()
+                    ));
+                }
+            },
+            MigrationOperation::AddConstraint { id, constraint_type, target, .. } => {
+                if id.trim().is_empty() || constraint_type.trim().is_empty() || target.trim().is_empty() {
+                    return Err(crate::error::FdmlError::migration_error(
+                        "AddConstraint operation requires non-empty id, constraint_type, and target".to_string()
                     ));
                 }
             },
@@ -689,6 +741,61 @@ impl MigrationRunner {
                         )));
                     }
                 }
+            },
+            
+            MigrationOperation::AddEntity { id, name, description, fields } => {
+                println!("  + Adding entity: {}", id);
+                
+                let entity = Entity {
+                    id: id.clone(),
+                    name: name.clone(),
+                    description: description.clone(),
+                    fields: fields.as_ref().map(|_| Vec::new()).unwrap_or_default(),
+                    relationships: None,
+                };
+                
+                document.entities.push(entity);
+            },
+            
+            MigrationOperation::AddAction { id, name, description, input, output } => {
+                println!("  + Adding action: {}", id);
+                
+                let action = Action {
+                    id: id.clone(),
+                    name: name.clone(),
+                    description: description.clone(),
+                    input: input.as_ref().map(|entity_name| ActionData {
+                        entity: Some(entity_name.clone()),
+                        fields: None,
+                        description: Some("Input data".to_string()),
+                    }),
+                    output: output.as_ref().map(|entity_name| ActionData {
+                        entity: Some(entity_name.clone()),
+                        fields: None,
+                        description: Some("Output data".to_string()),
+                    }),
+                    side_effects: None,
+                    preconditions: None,
+                    postconditions: None,
+                };
+                
+                document.actions.push(action);
+            },
+            
+            MigrationOperation::AddConstraint { id, description, constraint_type, target } => {
+                println!("  + Adding constraint: {} ({})", id, constraint_type);
+                
+                let constraint = Constraint {
+                    id: id.clone(),
+                    name: id.clone(),
+                    description: description.clone(),
+                    constraint_type: constraint_type.clone(),
+                    rule: format!("Rule for {}", target),
+                    entities: Some(vec![target.clone()]),
+                    actions: None,
+                };
+                
+                document.constraints.push(constraint);
             },
         }
         Ok(())

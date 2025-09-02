@@ -84,6 +84,18 @@ pub enum Commands {
         operation: MigrateCommands,
     },
     
+    /// Add FDML elements using migrations
+    Add {
+        #[command(subcommand)]
+        operation: AddCommands,
+    },
+    
+    /// List FDML elements
+    List {
+        #[command(subcommand)]
+        operation: ListCommands,
+    },
+    
     /// Traceability operations
     Trace {
         #[command(subcommand)]
@@ -171,6 +183,187 @@ pub enum TraceCommands {
         
         /// Output file
         #[arg(short, long, default_value = "traceability.csv")]
+        output: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AddCommands {
+    /// Add a new feature
+    Feature {
+        /// Feature ID
+        #[arg(short, long)]
+        id: String,
+        
+        /// Feature title
+        #[arg(short, long)]
+        title: String,
+        
+        /// Feature description
+        #[arg(short, long)]
+        description: Option<String>,
+        
+        /// Target FDML file
+        #[arg(long, default_value = "./spec.fdml")]
+        target: String,
+        
+        /// Dry run mode (don't apply changes)
+        #[arg(long)]
+        dry_run: bool,
+    },
+    
+    /// Add a new entity
+    Entity {
+        /// Entity ID
+        #[arg(short, long)]
+        id: String,
+        
+        /// Entity name
+        #[arg(short, long)]
+        name: Option<String>,
+        
+        /// Entity description
+        #[arg(short, long)]
+        description: Option<String>,
+        
+        /// Target FDML file
+        #[arg(long, default_value = "./spec.fdml")]
+        target: String,
+        
+        /// Dry run mode (don't apply changes)
+        #[arg(long)]
+        dry_run: bool,
+    },
+    
+    /// Add a new action
+    Action {
+        /// Action ID
+        #[arg(short, long)]
+        id: String,
+        
+        /// Action name
+        #[arg(short, long)]
+        name: Option<String>,
+        
+        /// Action description
+        #[arg(short, long)]
+        description: Option<String>,
+        
+        /// Input entity
+        #[arg(long)]
+        input: Option<String>,
+        
+        /// Output entity
+        #[arg(long)]
+        output: Option<String>,
+        
+        /// Target FDML file
+        #[arg(long, default_value = "./spec.fdml")]
+        target: String,
+        
+        /// Dry run mode (don't apply changes)
+        #[arg(long)]
+        dry_run: bool,
+    },
+    
+    /// Add a new constraint
+    Constraint {
+        /// Constraint ID
+        #[arg(short, long)]
+        id: String,
+        
+        /// Constraint description
+        #[arg(short, long)]
+        description: Option<String>,
+        
+        /// Constraint type
+        #[arg(short = 't', long)]
+        constraint_type: String,
+        
+        /// Target entity or action
+        #[arg(long)]
+        target: String,
+        
+        /// Target FDML file
+        #[arg(long, default_value = "./spec.fdml")]
+        target_file: String,
+        
+        /// Dry run mode (don't apply changes)
+        #[arg(long)]
+        dry_run: bool,
+    },
+    
+    /// Add a new field to an entity
+    Field {
+        /// Entity ID to add field to
+        #[arg(short, long)]
+        entity_id: String,
+        
+        /// Field name
+        #[arg(short, long)]
+        name: String,
+        
+        /// Field type
+        #[arg(short = 't', long)]
+        field_type: String,
+        
+        /// Whether field is required
+        #[arg(short, long)]
+        required: Option<bool>,
+        
+        /// Target FDML file
+        #[arg(long, default_value = "./spec.fdml")]
+        target: String,
+        
+        /// Dry run mode (don't apply changes)
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ListCommands {
+    /// List all features
+    Features {
+        /// Path to the FDML file
+        #[arg(default_value = "./spec.fdml")]
+        file: String,
+        
+        /// Output format (text, json)
+        #[arg(short, long, default_value = "text")]
+        output: String,
+    },
+    
+    /// List all entities
+    Entities {
+        /// Path to the FDML file
+        #[arg(default_value = "./spec.fdml")]
+        file: String,
+        
+        /// Output format (text, json)
+        #[arg(short, long, default_value = "text")]
+        output: String,
+    },
+    
+    /// List all actions
+    Actions {
+        /// Path to the FDML file
+        #[arg(default_value = "./spec.fdml")]
+        file: String,
+        
+        /// Output format (text, json)
+        #[arg(short, long, default_value = "text")]
+        output: String,
+    },
+    
+    /// List all constraints
+    Constraints {
+        /// Path to the FDML file
+        #[arg(default_value = "./spec.fdml")]
+        file: String,
+        
+        /// Output format (text, json)
+        #[arg(short, long, default_value = "text")]
         output: String,
     },
 }

@@ -1,4 +1,4 @@
-use crate::cli::args::{Cli, Commands, MigrateCommands, TraceCommands};
+use crate::cli::args::{Cli, Commands, MigrateCommands, TraceCommands, AddCommands, ListCommands};
 use crate::error::{print_error, print_info, print_success, print_warning, Result};
 use crate::parser::{parse_fdml_yaml, parse_fdml};
 use crate::project::ProjectInitializer;
@@ -27,6 +27,8 @@ impl CommandRunner {
                 self.run_generate(input, language, output, template, with_tests)
             },
             Commands::Migrate { operation } => self.run_migrate(operation),
+            Commands::Add { operation } => self.run_add(operation),
+            Commands::List { operation } => self.run_list(operation),
             Commands::Trace { operation } => self.run_trace(operation),
         }
     }
@@ -346,6 +348,351 @@ impl CommandRunner {
                 print_info(&format!("Would generate {} matrix in {}", format, output));
             }
         }
+        Ok(())
+    }
+    
+    fn run_add(&self, operation: AddCommands) -> Result<()> {
+        match operation {
+            AddCommands::Feature { id, title, description, target, dry_run } => {
+                if self.verbose {
+                    print_info(&format!("Adding feature: {} - {}", id, title));
+                }
+                
+                self.apply_add_migration("add_feature", &target, |migration_id| {
+                    crate::migration::Migration {
+                        id: migration_id,
+                        title: Some(format!("Add feature {}", id)),
+                        description: Some("Auto-generated migration from CLI add command".to_string()),
+                        up: vec![crate::migration::MigrationOperation::AddFeature {
+                            id: id.clone(),
+                            title: title.clone(),
+                            description: description.clone(),
+                            scenarios: None,
+                        }],
+                        down: vec![crate::migration::MigrationOperation::RemoveFeature {
+                            id: id.clone(),
+                        }],
+                        dependencies: None,
+                    }
+                }, dry_run)?;
+                
+                if !dry_run {
+                    print_success(&format!("Successfully added feature: {}", id));
+                }
+            },
+            
+            AddCommands::Entity { id, name, description, target, dry_run } => {
+                if self.verbose {
+                    print_info(&format!("Adding entity: {}", id));
+                }
+                
+                self.apply_add_migration("add_entity", &target, |migration_id| {
+                    crate::migration::Migration {
+                        id: migration_id,
+                        title: Some(format!("Add entity {}", id)),
+                        description: Some("Auto-generated migration from CLI add command".to_string()),
+                        up: vec![crate::migration::MigrationOperation::AddEntity {
+                            id: id.clone(),
+                            name: name.clone(),
+                            description: description.clone(),
+                            fields: None,
+                        }],
+                        down: vec![], // TODO: Add RemoveEntity operation for rollback
+                        dependencies: None,
+                    }
+                }, dry_run)?;
+                
+                if !dry_run {
+                    print_success(&format!("Successfully added entity: {}", id));
+                }
+            },
+            
+            AddCommands::Action { id, name, description, input, output, target, dry_run } => {
+                if self.verbose {
+                    print_info(&format!("Adding action: {}", id));
+                }
+                
+                self.apply_add_migration("add_action", &target, |migration_id| {
+                    crate::migration::Migration {
+                        id: migration_id,
+                        title: Some(format!("Add action {}", id)),
+                        description: Some("Auto-generated migration from CLI add command".to_string()),
+                        up: vec![crate::migration::MigrationOperation::AddAction {
+                            id: id.clone(),
+                            name: name.clone(),
+                            description: description.clone(),
+                            input: input.clone(),
+                            output: output.clone(),
+                        }],
+                        down: vec![], // TODO: Add RemoveAction operation for rollback
+                        dependencies: None,
+                    }
+                }, dry_run)?;
+                
+                if !dry_run {
+                    print_success(&format!("Successfully added action: {}", id));
+                }
+            },
+            
+            AddCommands::Constraint { id, description, constraint_type, target, target_file, dry_run } => {
+                if self.verbose {
+                    print_info(&format!("Adding constraint: {} ({})", id, constraint_type));
+                }
+                
+                self.apply_add_migration("add_constraint", &target_file, |migration_id| {
+                    crate::migration::Migration {
+                        id: migration_id,
+                        title: Some(format!("Add constraint {}", id)),
+                        description: Some("Auto-generated migration from CLI add command".to_string()),
+                        up: vec![crate::migration::MigrationOperation::AddConstraint {
+                            id: id.clone(),
+                            description: description.clone(),
+                            constraint_type: constraint_type.clone(),
+                            target: target.clone(),
+                        }],
+                        down: vec![], // TODO: Add RemoveConstraint operation for rollback
+                        dependencies: None,
+                    }
+                }, dry_run)?;
+                
+                if !dry_run {
+                    print_success(&format!("Successfully added constraint: {}", id));
+                }
+            },
+            
+            AddCommands::Field { entity_id, name, field_type, required, target, dry_run } => {
+                if self.verbose {
+                    print_info(&format!("Adding field {} to entity {}", name, entity_id));
+                }
+                
+                self.apply_add_migration("add_field", &target, |migration_id| {
+                    crate::migration::Migration {
+                        id: migration_id,
+                        title: Some(format!("Add field {} to {}", name, entity_id)),
+                        description: Some("Auto-generated migration from CLI add command".to_string()),
+                        up: vec![crate::migration::MigrationOperation::AddField {
+                            entity_id: entity_id.clone(),
+                            field_name: name.clone(),
+                            field_type: field_type.clone(),
+                            required: required.clone(),
+                            default: None,
+                        }],
+                        down: vec![crate::migration::MigrationOperation::RemoveField {
+                            entity_id: entity_id.clone(),
+                            field_name: name.clone(),
+                        }],
+                        dependencies: None,
+                    }
+                }, dry_run)?;
+                
+                if !dry_run {
+                    print_success(&format!("Successfully added field {} to entity {}", name, entity_id));
+                }
+            },
+        }
+        Ok(())
+    }
+    
+    fn run_list(&self, operation: ListCommands) -> Result<()> {
+        match operation {
+            ListCommands::Features { file, output } => {
+                if self.verbose {
+                    print_info(&format!("Listing features from: {}", file));
+                }
+                
+                let content = fs::read_to_string(&file).map_err(|e| {
+                    crate::error::FdmlError::project_error(format!("Failed to read file '{}': {}", file, e))
+                })?;
+                
+                let document = parse_fdml_yaml(&content)?;
+                
+                match output.as_str() {
+                    "json" => {
+                        let json_output = serde_json::to_string_pretty(&document.features)?;
+                        println!("{}", json_output);
+                    },
+                    "text" | _ => {
+                        if document.features.is_empty() {
+                            print_info("No features found");
+                        } else {
+                            print_success(&format!("Found {} features:", document.features.len()));
+                            for feature in &document.features {
+                                println!("  🚀 {} - {}", feature.id, feature.title);
+                                if let Some(description) = &feature.description {
+                                    println!("     {}", description);
+                                }
+                                if !feature.scenarios.is_empty() {
+                                    println!("     {} scenarios", feature.scenarios.len());
+                                }
+                                println!();
+                            }
+                        }
+                    }
+                }
+            },
+            
+            ListCommands::Entities { file, output } => {
+                if self.verbose {
+                    print_info(&format!("Listing entities from: {}", file));
+                }
+                
+                let content = fs::read_to_string(&file).map_err(|e| {
+                    crate::error::FdmlError::project_error(format!("Failed to read file '{}': {}", file, e))
+                })?;
+                
+                let document = parse_fdml_yaml(&content)?;
+                
+                match output.as_str() {
+                    "json" => {
+                        let json_output = serde_json::to_string_pretty(&document.entities)?;
+                        println!("{}", json_output);
+                    },
+                    "text" | _ => {
+                        if document.entities.is_empty() {
+                            print_info("No entities found");
+                        } else {
+                            print_success(&format!("Found {} entities:", document.entities.len()));
+                            for entity in &document.entities {
+                                println!("  📦 {} - {}", entity.id, entity.name.as_ref().unwrap_or(&"No name".to_string()));
+                                if let Some(description) = &entity.description {
+                                    println!("     {}", description);
+                                }
+                                if !entity.fields.is_empty() {
+                                    println!("     {} fields", entity.fields.len());
+                                    for field in &entity.fields {
+                                        let required = if field.required.unwrap_or(false) { "*" } else { "" };
+                                        println!("       - {}: {}{}", field.name, field.field_type, required);
+                                    }
+                                }
+                                println!();
+                            }
+                        }
+                    }
+                }
+            },
+            
+            ListCommands::Actions { file, output } => {
+                if self.verbose {
+                    print_info(&format!("Listing actions from: {}", file));
+                }
+                
+                let content = fs::read_to_string(&file).map_err(|e| {
+                    crate::error::FdmlError::project_error(format!("Failed to read file '{}': {}", file, e))
+                })?;
+                
+                let document = parse_fdml_yaml(&content)?;
+                
+                match output.as_str() {
+                    "json" => {
+                        let json_output = serde_json::to_string_pretty(&document.actions)?;
+                        println!("{}", json_output);
+                    },
+                    "text" | _ => {
+                        if document.actions.is_empty() {
+                            print_info("No actions found");
+                        } else {
+                            print_success(&format!("Found {} actions:", document.actions.len()));
+                            for action in &document.actions {
+                                println!("  ⚡ {} - {}", action.id, action.name.as_ref().unwrap_or(&"No name".to_string()));
+                                if let Some(description) = &action.description {
+                                    println!("     {}", description);
+                                }
+                                if let Some(input) = &action.input {
+                                    if let Some(entity) = &input.entity {
+                                        println!("     Input: {}", entity);
+                                    }
+                                }
+                                if let Some(output) = &action.output {
+                                    if let Some(entity) = &output.entity {
+                                        println!("     Output: {}", entity);
+                                    }
+                                }
+                                println!();
+                            }
+                        }
+                    }
+                }
+            },
+            
+            ListCommands::Constraints { file, output } => {
+                if self.verbose {
+                    print_info(&format!("Listing constraints from: {}", file));
+                }
+                
+                let content = fs::read_to_string(&file).map_err(|e| {
+                    crate::error::FdmlError::project_error(format!("Failed to read file '{}': {}", file, e))
+                })?;
+                
+                let document = parse_fdml_yaml(&content)?;
+                
+                match output.as_str() {
+                    "json" => {
+                        let json_output = serde_json::to_string_pretty(&document.constraints)?;
+                        println!("{}", json_output);
+                    },
+                    "text" | _ => {
+                        if document.constraints.is_empty() {
+                            print_info("No constraints found");
+                        } else {
+                            print_success(&format!("Found {} constraints:", document.constraints.len()));
+                            for constraint in &document.constraints {
+                                println!("  🔒 {} - {} ({})", constraint.id, constraint.name, constraint.constraint_type);
+                                if let Some(description) = &constraint.description {
+                                    println!("     {}", description);
+                                }
+                                println!("     Rule: {}", constraint.rule);
+                                if let Some(entities) = &constraint.entities {
+                                    println!("     Entities: {}", entities.join(", "));
+                                }
+                                println!();
+                            }
+                        }
+                    }
+                }
+            },
+        }
+        Ok(())
+    }
+    
+    /// Helper function to apply migrations from CLI add commands
+    fn apply_add_migration<F>(&self, operation_type: &str, target_file: &str, migration_factory: F, dry_run: bool) -> Result<()>
+    where
+        F: FnOnce(String) -> crate::migration::Migration,
+    {
+        use tempfile::TempDir;
+        
+        // Create a temporary migration directory
+        let temp_dir = TempDir::new().map_err(|e| {
+            crate::error::FdmlError::migration_error(format!("Failed to create temp directory: {}", e))
+        })?;
+        
+        let migration_dir = temp_dir.path().join("migrations");
+        std::fs::create_dir_all(&migration_dir)?;
+        
+        // Generate a migration ID based on timestamp
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let migration_id = format!("{}_{:03}_{}", timestamp, 1, operation_type);
+        
+        // Create the migration
+        let migration = migration_factory(migration_id.clone());
+        
+        // Write migration to file
+        let migration_file = migration_dir.join(format!("{}.yaml", migration_id));
+        let migration_content = serde_yaml::to_string(&migration)?;
+        std::fs::write(&migration_file, migration_content)?;
+        
+        if dry_run {
+            print_info("🔍 Dry run mode - showing what would be applied:");
+        }
+        
+        // Apply the migration using MigrationRunner
+        let runner = MigrationRunner::new(&migration_dir).with_target_file(target_file);
+        let applied = runner.apply_migrations(dry_run)?;
+        
+        if dry_run {
+            print_info(&format!("Would apply {} migration(s)", applied.len()));
+        }
+        
         Ok(())
     }
 }
