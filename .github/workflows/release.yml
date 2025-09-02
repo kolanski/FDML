@@ -8,6 +8,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   build-and-release:
     name: Build and Release
@@ -105,6 +108,9 @@ jobs:
     name: Create GitHub Release
     needs: build-and-release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
