@@ -572,26 +572,33 @@ impl CommandRunner {
     
     /// Apply a single migration operation directly (used for add commands)
     fn apply_single_operation(&self, operation: MigrationOperation, target: Option<String>) -> Result<()> {
-        // Create a temporary migration directory for this operation
-        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        // Determine target file
+        let target_file = if let Some(target_file) = target {
+            let path = PathBuf::from(target_file);
+            // Check if the target file exists for direct operations
+            if !path.exists() {
+                return Err(crate::error::FdmlError::project_error(
+                    format!("Target file '{}' does not exist. Use 'fdml init' to create a new project first.", path.display())
+                ));
+            }
+            path
+        } else {
+            // Find default FDML file in current directory
+            let current_dir = std::env::current_dir()?;
+            self.find_default_fdml_file(&current_dir)?.ok_or_else(|| {
+                crate::error::FdmlError::project_error(
+                    "No target file specified and no FDML file found in current directory. Use --target to specify a file.".to_string()
+                )
+            })?
+        };
+        
+        // Create a temporary migration directory for this operation with a unique name
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S_%f");
         let temp_dir = std::env::temp_dir().join(format!("fdml_direct_{}", timestamp));
         std::fs::create_dir_all(&temp_dir)?;
         
         // Create temporary migration runner
-        let mut runner = MigrationRunner::new(&temp_dir);
-        if let Some(target_file) = target {
-            runner = runner.with_target_file(&target_file);
-        } else {
-            // Find default FDML file in current directory
-            let current_dir = std::env::current_dir()?;
-            if let Some(default_file) = self.find_default_fdml_file(&current_dir)? {
-                runner = runner.with_target_file(&default_file);
-            } else {
-                return Err(crate::error::FdmlError::project_error(
-                    "No target file specified and no FDML file found in current directory. Use --target to specify a file.".to_string()
-                ));
-            }
-        }
+        let runner = MigrationRunner::new(&temp_dir).with_target_file(&target_file);
         
         // Validate the operation
         runner.validate_operation(&operation)?;

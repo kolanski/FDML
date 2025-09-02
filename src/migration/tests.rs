@@ -369,4 +369,182 @@ features:
         };
         assert!(runner.validate_operation(&invalid_field_op).is_err());
     }
+
+    #[test]
+    fn test_add_entity_operation() {
+        let temp_dir = TempDir::new().unwrap();
+        let migration_dir = temp_dir.path().join("migrations");
+        let target_file = temp_dir.path().join("test.fdml");
+        fs::create_dir_all(&migration_dir).unwrap();
+
+        create_test_fdml_file(&target_file);
+
+        let migration = Migration {
+            id: "001_add_entity".to_string(),
+            title: Some("Add Entity".to_string()),
+            description: None,
+            up: vec![MigrationOperation::AddEntity {
+                id: "new_entity".to_string(),
+                name: "New Entity".to_string(),
+                description: Some("A new entity".to_string()),
+            }],
+            down: vec![MigrationOperation::RemoveEntity {
+                id: "new_entity".to_string(),
+            }],
+            dependencies: None,
+        };
+
+        create_test_migration_file(&migration_dir, "001_add_entity.yaml", &migration);
+
+        let runner = MigrationRunner::new(&migration_dir).with_target_file(&target_file);
+        let applied = runner.apply_migrations(false).unwrap();
+
+        assert_eq!(applied.len(), 1);
+
+        // Verify entity was added
+        let content = fs::read_to_string(&target_file).unwrap();
+        assert!(content.contains("new_entity"));
+        assert!(content.contains("New Entity"));
+    }
+
+    #[test]
+    fn test_add_action_operation() {
+        let temp_dir = TempDir::new().unwrap();
+        let migration_dir = temp_dir.path().join("migrations");
+        let target_file = temp_dir.path().join("test.fdml");
+        fs::create_dir_all(&migration_dir).unwrap();
+
+        create_test_fdml_file(&target_file);
+
+        let migration = Migration {
+            id: "001_add_action".to_string(),
+            title: Some("Add Action".to_string()),
+            description: None,
+            up: vec![MigrationOperation::AddAction {
+                id: "new_action".to_string(),
+                name: "New Action".to_string(),
+                description: Some("A new action".to_string()),
+            }],
+            down: vec![MigrationOperation::RemoveAction {
+                id: "new_action".to_string(),
+            }],
+            dependencies: None,
+        };
+
+        create_test_migration_file(&migration_dir, "001_add_action.yaml", &migration);
+
+        let runner = MigrationRunner::new(&migration_dir).with_target_file(&target_file);
+        let applied = runner.apply_migrations(false).unwrap();
+
+        assert_eq!(applied.len(), 1);
+
+        // Verify action was added
+        let content = fs::read_to_string(&target_file).unwrap();
+        assert!(content.contains("new_action"));
+        assert!(content.contains("New Action"));
+    }
+
+    #[test]
+    fn test_add_constraint_operation() {
+        let temp_dir = TempDir::new().unwrap();
+        let migration_dir = temp_dir.path().join("migrations");
+        let target_file = temp_dir.path().join("test.fdml");
+        fs::create_dir_all(&migration_dir).unwrap();
+
+        create_test_fdml_file(&target_file);
+
+        let migration = Migration {
+            id: "001_add_constraint".to_string(),
+            title: Some("Add Constraint".to_string()),
+            description: None,
+            up: vec![MigrationOperation::AddConstraint {
+                id: "new_constraint".to_string(),
+                name: "New Constraint".to_string(),
+                description: Some("A new constraint".to_string()),
+                condition: "unique(email)".to_string(),
+                applies_to: "user.email".to_string(),
+                message: Some("Email must be unique".to_string()),
+            }],
+            down: vec![MigrationOperation::RemoveConstraint {
+                id: "new_constraint".to_string(),
+            }],
+            dependencies: None,
+        };
+
+        create_test_migration_file(&migration_dir, "001_add_constraint.yaml", &migration);
+
+        let runner = MigrationRunner::new(&migration_dir).with_target_file(&target_file);
+        let applied = runner.apply_migrations(false).unwrap();
+
+        assert_eq!(applied.len(), 1);
+
+        // Verify constraint was added
+        let content = fs::read_to_string(&target_file).unwrap();
+        assert!(content.contains("new_constraint"));
+        assert!(content.contains("New Constraint"));
+        assert!(content.contains("unique(email)"));
+    }
+
+    #[test]
+    fn test_new_operation_validation() {
+        let temp_dir = TempDir::new().unwrap();
+        let migration_dir = temp_dir.path().join("migrations");
+        fs::create_dir_all(&migration_dir).unwrap();
+
+        let runner = MigrationRunner::new(&migration_dir);
+
+        // Valid AddEntity operation
+        let valid_entity_op = MigrationOperation::AddEntity {
+            id: "valid_entity".to_string(),
+            name: "Valid Entity".to_string(),
+            description: None,
+        };
+        assert!(runner.validate_operation(&valid_entity_op).is_ok());
+
+        // Invalid AddEntity operation (empty id)
+        let invalid_entity_op = MigrationOperation::AddEntity {
+            id: "".to_string(),
+            name: "Invalid Entity".to_string(),
+            description: None,
+        };
+        assert!(runner.validate_operation(&invalid_entity_op).is_err());
+
+        // Valid AddAction operation
+        let valid_action_op = MigrationOperation::AddAction {
+            id: "valid_action".to_string(),
+            name: "Valid Action".to_string(),
+            description: None,
+        };
+        assert!(runner.validate_operation(&valid_action_op).is_ok());
+
+        // Invalid AddAction operation (empty name)
+        let invalid_action_op = MigrationOperation::AddAction {
+            id: "valid_id".to_string(),
+            name: "".to_string(),
+            description: None,
+        };
+        assert!(runner.validate_operation(&invalid_action_op).is_err());
+
+        // Valid AddConstraint operation
+        let valid_constraint_op = MigrationOperation::AddConstraint {
+            id: "valid_constraint".to_string(),
+            name: "Valid Constraint".to_string(),
+            description: None,
+            condition: "valid condition".to_string(),
+            applies_to: "entity.field".to_string(),
+            message: None,
+        };
+        assert!(runner.validate_operation(&valid_constraint_op).is_ok());
+
+        // Invalid AddConstraint operation (empty condition)
+        let invalid_constraint_op = MigrationOperation::AddConstraint {
+            id: "valid_id".to_string(),
+            name: "Valid Name".to_string(),
+            description: None,
+            condition: "".to_string(),
+            applies_to: "entity.field".to_string(),
+            message: None,
+        };
+        assert!(runner.validate_operation(&invalid_constraint_op).is_err());
+    }
 }
