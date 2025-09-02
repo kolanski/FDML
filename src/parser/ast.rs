@@ -5,12 +5,19 @@ use std::collections::HashMap;
 pub struct FdmlDocument {
     pub metadata: Option<Metadata>,
     pub system: Option<System>,
+    #[serde(default)]
     pub entities: Vec<Entity>,
+    #[serde(default)]
     pub actions: Vec<Action>,
+    #[serde(default)]
     pub features: Vec<Feature>,
+    #[serde(default)]
     pub flows: Vec<Flow>,
+    #[serde(default)]
     pub constraints: Vec<Constraint>,
+    #[serde(default)]
     pub traceability: Vec<Traceability>,
+    #[serde(default)]
     pub generation_rules: Vec<GenerationRule>,
 }
 

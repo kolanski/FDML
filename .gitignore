@@ -1,2 +1,59 @@
 *.fdml
 target/
+!examples/**/*.fdml
+
+# Rust build artifacts
+/target/
+**/*.rs.bk
+**/*.pdb
+
+# Dependency locks (libraries shouldn't commit lock files)
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Generated files
+generated/
+output/
+dist/
+build/
+
+# Node.js (in case of JS tooling)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.eslintcache
+
+# Python (in case of Python tooling)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+.temp/
