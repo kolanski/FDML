@@ -590,3 +590,303 @@ fn test_full_project_lifecycle() {
         .assert()
         .success();
 }
+
+#[test]
+fn test_add_entity_command() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.fdml");
+    
+    // Create a minimal FDML file
+    fs::write(&test_file, r#"
+metadata:
+  version: "1.3"
+  author: "Test"
+  description: "Test file"
+
+entities: []
+actions: []
+features: []
+constraints: []
+"#).unwrap();
+    
+    // Test adding an entity
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("add")
+        .arg("entity")
+        .arg("test_entity")
+        .arg("--name")
+        .arg("Test Entity")
+        .arg("--description")
+        .arg("A test entity")
+        .arg("--target")
+        .arg(&test_file)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Successfully added entity: test_entity"));
+    
+    // Verify the entity was added
+    let content = fs::read_to_string(&test_file).unwrap();
+    assert!(content.contains("test_entity"));
+    assert!(content.contains("Test Entity"));
+}
+
+#[test]
+fn test_add_action_command() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.fdml");
+    
+    // Create a minimal FDML file
+    fs::write(&test_file, r#"
+metadata:
+  version: "1.3"
+  author: "Test"
+  description: "Test file"
+
+entities: []
+actions: []
+features: []
+constraints: []
+"#).unwrap();
+    
+    // Test adding an action
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("add")
+        .arg("action")
+        .arg("test_action")
+        .arg("--name")
+        .arg("Test Action")
+        .arg("--description")
+        .arg("A test action")
+        .arg("--target")
+        .arg(&test_file)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Successfully added action: test_action"));
+    
+    // Verify the action was added
+    let content = fs::read_to_string(&test_file).unwrap();
+    assert!(content.contains("test_action"));
+    assert!(content.contains("Test Action"));
+}
+
+#[test]
+fn test_add_feature_command() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.fdml");
+    
+    // Create a minimal FDML file
+    fs::write(&test_file, r#"
+metadata:
+  version: "1.3"
+  author: "Test"
+  description: "Test file"
+
+entities: []
+actions: []
+features: []
+constraints: []
+"#).unwrap();
+    
+    // Test adding a feature
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("add")
+        .arg("feature")
+        .arg("test_feature")
+        .arg("--title")
+        .arg("Test Feature")
+        .arg("--description")
+        .arg("A test feature")
+        .arg("--target")
+        .arg(&test_file)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Successfully added feature: test_feature"));
+    
+    // Verify the feature was added
+    let content = fs::read_to_string(&test_file).unwrap();
+    assert!(content.contains("test_feature"));
+    assert!(content.contains("Test Feature"));
+}
+
+#[test]
+fn test_add_constraint_command() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.fdml");
+    
+    // Create a minimal FDML file
+    fs::write(&test_file, r#"
+metadata:
+  version: "1.3"
+  author: "Test"
+  description: "Test file"
+
+entities: []
+actions: []
+features: []
+constraints: []
+"#).unwrap();
+    
+    // Test adding a constraint
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("add")
+        .arg("constraint")
+        .arg("test_constraint")
+        .arg("--name")
+        .arg("Test Constraint")
+        .arg("--condition")
+        .arg("length(name) > 0")
+        .arg("--applies-to")
+        .arg("entity.name")
+        .arg("--target")
+        .arg(&test_file)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Successfully added constraint: test_constraint"));
+    
+    // Verify the constraint was added
+    let content = fs::read_to_string(&test_file).unwrap();
+    assert!(content.contains("test_constraint"));
+    assert!(content.contains("Test Constraint"));
+    assert!(content.contains("length(name) > 0"));
+}
+
+#[test]
+fn test_add_field_command() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.fdml");
+    
+    // Create a FDML file with an entity
+    fs::write(&test_file, r#"
+metadata:
+  version: "1.3"
+  author: "Test"
+  description: "Test file"
+
+entities:
+  - id: test_entity
+    name: "Test Entity"
+    description: "A test entity"
+    fields:
+      - name: id
+        type: string
+        required: true
+
+actions: []
+features: []
+constraints: []
+"#).unwrap();
+    
+    // Test adding a field
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("add")
+        .arg("field")
+        .arg("test_entity")
+        .arg("email")
+        .arg("--field-type")
+        .arg("string")
+        .arg("--required")
+        .arg("--target")
+        .arg(&test_file)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Successfully added field email to entity test_entity"));
+    
+    // Verify the field was added
+    let content = fs::read_to_string(&test_file).unwrap();
+    assert!(content.contains("email"));
+    assert!(content.contains("string"));
+}
+
+#[test]
+fn test_list_entities_command() {
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("list")
+        .arg("entities")
+        .arg("--target")
+        .arg("examples/e-commerce/ecommerce.fdml")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Entities (4):"))
+        .stdout(predicate::str::contains("user - User"))
+        .stdout(predicate::str::contains("product - Product"));
+}
+
+#[test]
+fn test_list_features_command() {
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("list")
+        .arg("features")
+        .arg("--target")
+        .arg("examples/e-commerce/ecommerce.fdml")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Features (3):"))
+        .stdout(predicate::str::contains("user_registration"))
+        .stdout(predicate::str::contains("product_catalog"));
+}
+
+#[test]
+fn test_list_actions_command() {
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("list")
+        .arg("actions")
+        .arg("--target")
+        .arg("examples/e-commerce/ecommerce.fdml")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Actions (6):"))
+        .stdout(predicate::str::contains("create_user"))
+        .stdout(predicate::str::contains("list_products"));
+}
+
+#[test]
+fn test_add_command_error_handling() {
+    let temp_dir = TempDir::new().unwrap();
+    let nonexistent_file = temp_dir.path().join("nonexistent.fdml");
+    
+    // Test adding to a nonexistent file should fail
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("add")
+        .arg("entity")
+        .arg("test_entity")
+        .arg("--name")
+        .arg("Test Entity")
+        .arg("--target")
+        .arg(&nonexistent_file)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("does not exist"));
+}
+
+#[test]
+fn test_add_field_to_nonexistent_entity() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.fdml");
+    
+    // Create a minimal FDML file without the entity
+    fs::write(&test_file, r#"
+metadata:
+  version: "1.3"
+  author: "Test"
+  description: "Test file"
+
+entities: []
+actions: []
+features: []
+constraints: []
+"#).unwrap();
+    
+    // Test adding a field to a nonexistent entity should fail
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("add")
+        .arg("field")
+        .arg("nonexistent_entity")
+        .arg("test_field")
+        .arg("--field-type")
+        .arg("string")
+        .arg("--target")
+        .arg(&test_file)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Entity 'nonexistent_entity' not found"));
+}
