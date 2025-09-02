@@ -590,3 +590,184 @@ fn test_full_project_lifecycle() {
         .assert()
         .success();
 }
+
+// Tests for new add and list commands
+#[test]
+fn test_list_features_command() {
+    let temp_dir = TempDir::new().unwrap();
+    let fdml_content = r#"
+metadata:
+  version: "1.3"
+
+features:
+  - id: test_feature
+    title: "Test Feature"
+    description: "A test feature"
+    scenarios: []
+"#;
+    let fdml_file = temp_dir.path().join("test.fdml");
+    fs::write(&fdml_file, fdml_content).unwrap();
+    
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("list")
+        .arg("features")
+        .arg(&fdml_file);
+        
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Found 1 features"))
+        .stdout(predicate::str::contains("test_feature"))
+        .stdout(predicate::str::contains("Test Feature"));
+}
+
+#[test]
+fn test_list_entities_command() {
+    let temp_dir = TempDir::new().unwrap();
+    let fdml_content = r#"
+metadata:
+  version: "1.3"
+
+entities:
+  - id: user
+    name: "User"
+    fields:
+      - name: id
+        type: string
+        required: true
+      - name: email
+        type: string
+        required: false
+"#;
+    let fdml_file = temp_dir.path().join("test.fdml");
+    fs::write(&fdml_file, fdml_content).unwrap();
+    
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("list")
+        .arg("entities")
+        .arg(&fdml_file);
+        
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Found 1 entities"))
+        .stdout(predicate::str::contains("user - User"))
+        .stdout(predicate::str::contains("2 fields"))
+        .stdout(predicate::str::contains("id: string*"))
+        .stdout(predicate::str::contains("email: string"));
+}
+
+#[test]
+fn test_list_json_output() {
+    let temp_dir = TempDir::new().unwrap();
+    let fdml_content = r#"
+metadata:
+  version: "1.3"
+
+features:
+  - id: test_feature
+    title: "Test Feature"
+    scenarios: []
+"#;
+    let fdml_file = temp_dir.path().join("test.fdml");
+    fs::write(&fdml_file, fdml_content).unwrap();
+    
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("list")
+        .arg("features")
+        .arg(&fdml_file)
+        .arg("--output")
+        .arg("json");
+        
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\"id\": \"test_feature\""))
+        .stdout(predicate::str::contains("\"title\": \"Test Feature\""));
+}
+
+#[test]
+fn test_add_feature_dry_run() {
+    let temp_dir = TempDir::new().unwrap();
+    let fdml_content = r#"
+metadata:
+  version: "1.3"
+
+features: []
+"#;
+    let fdml_file = temp_dir.path().join("test.fdml");
+    fs::write(&fdml_file, fdml_content).unwrap();
+    
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("add")
+        .arg("feature")
+        .arg("--id")
+        .arg("new_feature")
+        .arg("--title")
+        .arg("New Feature")
+        .arg("--target")
+        .arg(&fdml_file)
+        .arg("--dry-run");
+        
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("🔍 Dry run mode"))
+        .stdout(predicate::str::contains("Would apply"))
+        .stdout(predicate::str::contains("add_feature"));
+}
+
+#[test]
+fn test_add_entity_command() {
+    let temp_dir = TempDir::new().unwrap();
+    let fdml_content = r#"
+metadata:
+  version: "1.3"
+
+entities: []
+"#;
+    let fdml_file = temp_dir.path().join("test.fdml");
+    fs::write(&fdml_file, fdml_content).unwrap();
+    
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("add")
+        .arg("entity")
+        .arg("--id")
+        .arg("product")
+        .arg("--name")
+        .arg("Product")
+        .arg("--description")
+        .arg("Product entity")
+        .arg("--target")
+        .arg(&fdml_file);
+        
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Successfully added entity: product"));
+        
+    // Verify entity was added
+    let content = fs::read_to_string(&fdml_file).unwrap();
+    assert!(content.contains("id: product"));
+    assert!(content.contains("name: Product"));
+}
+
+#[test]
+fn test_list_empty_collections() {
+    let temp_dir = TempDir::new().unwrap();
+    let fdml_content = r#"
+metadata:
+  version: "1.3"
+
+features: []
+entities: []
+actions: []
+constraints: []
+"#;
+    let fdml_file = temp_dir.path().join("test.fdml");
+    fs::write(&fdml_file, fdml_content).unwrap();
+    
+    let mut cmd = Command::cargo_bin("fdml").unwrap();
+    cmd.arg("list")
+        .arg("features")
+        .arg(&fdml_file);
+        
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("No features found"));
+}
