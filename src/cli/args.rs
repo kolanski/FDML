@@ -99,6 +99,10 @@ pub enum MigrateCommands {
         #[arg(short, long, default_value = "./migrations")]
         path: String,
         
+        /// Target FDML file to modify
+        #[arg(short, long)]
+        target: Option<String>,
+        
         /// Dry run mode (don't apply changes)
         #[arg(long)]
         dry_run: bool,
@@ -109,6 +113,10 @@ pub enum MigrateCommands {
         /// Path to migration files
         #[arg(short, long, default_value = "./migrations")]
         path: String,
+        
+        /// Target FDML file to modify
+        #[arg(short, long)]
+        target: Option<String>,
         
         /// Number of migrations to rollback
         #[arg(short, long, default_value = "1")]

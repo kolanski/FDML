@@ -240,31 +240,45 @@ impl CommandRunner {
     
     fn run_migrate(&self, operation: MigrateCommands) -> Result<()> {
         match operation {
-            MigrateCommands::Apply { path, dry_run } => {
+            MigrateCommands::Apply { path, target, dry_run } => {
                 if self.verbose {
                     print_info(&format!("Applying migrations from: {}", path));
+                    if let Some(ref target_file) = target {
+                        print_info(&format!("Target FDML file: {}", target_file));
+                    }
                 }
                 
-                let runner = MigrationRunner::new(&path);
+                let mut runner = MigrationRunner::new(&path);
+                if let Some(target_file) = target {
+                    runner = runner.with_target_file(&target_file);
+                }
+                
                 let applied = runner.apply_migrations(dry_run)?;
                 
-                if applied.is_empty() {
+                if applied.is_empty() && !dry_run {
                     print_info("No pending migrations to apply");
-                } else {
+                } else if !dry_run {
                     print_success(&format!("Applied {} migrations", applied.len()));
                 }
             },
-            MigrateCommands::Rollback { path, count, dry_run } => {
+            MigrateCommands::Rollback { path, target, count, dry_run } => {
                 if self.verbose {
                     print_info(&format!("Rolling back {} migrations from: {}", count, path));
+                    if let Some(ref target_file) = target {
+                        print_info(&format!("Target FDML file: {}", target_file));
+                    }
                 }
                 
-                let runner = MigrationRunner::new(&path);
+                let mut runner = MigrationRunner::new(&path);
+                if let Some(target_file) = target {
+                    runner = runner.with_target_file(&target_file);
+                }
+                
                 let rolled_back = runner.rollback_migrations(count, dry_run)?;
                 
-                if rolled_back.is_empty() {
+                if rolled_back.is_empty() && !dry_run {
                     print_info("No migrations to rollback");
-                } else {
+                } else if !dry_run {
                     print_success(&format!("Rolled back {} migrations", rolled_back.len()));
                 }
             },
