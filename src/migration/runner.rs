@@ -155,7 +155,12 @@ impl MigrationRunner {
                 let backup_filename = format!("backup_{}.fdml", timestamp);
                 let backup_path = self.backup_dir.join(backup_filename);
                 
-                fs::copy(target_file, &backup_path)?;
+                // Use a more explicit approach to file copying that ensures completion
+                {
+                    let content = fs::read_to_string(target_file)?;
+                    fs::write(&backup_path, content)?;
+                }
+                
                 println!("  📁 Created backup: {}", backup_path.display());
                 return Ok(Some(backup_path));
             }
