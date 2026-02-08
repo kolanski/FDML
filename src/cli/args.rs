@@ -101,6 +101,25 @@ pub enum Commands {
         #[command(subcommand)]
         operation: TraceCommands,
     },
+
+    /// Scan existing source code and extract inventory (entities, actions, relationships)
+    #[command(name = "parse-code")]
+    ParseCode {
+        /// Path to the source code directory or file to scan
+        input: String,
+
+        /// Output file path (default: stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Output format (yaml, json)
+        #[arg(short, long, default_value = "yaml")]
+        format: String,
+
+        /// Directories to exclude from scanning (comma-separated)
+        #[arg(short, long, value_delimiter = ',')]
+        exclude: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]

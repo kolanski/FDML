@@ -30,6 +30,9 @@ impl CommandRunner {
             Commands::List { operation } => self.run_list(operation),
             Commands::Migrate { operation } => self.run_migrate(operation),
             Commands::Trace { operation } => self.run_trace(operation),
+            Commands::ParseCode { input, output, format, exclude } => {
+                self.run_parse_code(input, output, format, exclude)
+            },
         }
     }
     
@@ -570,6 +573,52 @@ impl CommandRunner {
         Ok(())
     }
     
+    fn run_parse_code(&self, input: String, output: Option<String>, format: String, exclude: Vec<String>) -> Result<()> {
+        if self.verbose {
+            print_info(&format!("Scanning source code in: {}", input));
+        }
+
+        let result = crate::scanner::scan_project(&input, &exclude)?;
+
+        // Format output
+        let output_str = match format.as_str() {
+            "json" => serde_json::to_string_pretty(&result)
+                .map_err(|e| crate::error::FdmlError::project_error(format!("JSON serialization error: {}", e)))?,
+            "yaml" | _ => serde_yaml::to_string(&result)
+                .map_err(|e| crate::error::FdmlError::project_error(format!("YAML serialization error: {}", e)))?,
+        };
+
+        // Write to file or stdout
+        if let Some(output_path) = output {
+            fs::write(&output_path, &output_str).map_err(|e| {
+                crate::error::FdmlError::project_error(format!("Failed to write output to {}: {}", output_path, e))
+            })?;
+            print_success(&format!("Code analysis written to: {}", output_path));
+        } else {
+            println!("{}", output_str);
+        }
+
+        // Print summary
+        let stats = &result.statistics;
+        print_success(&format!(
+            "Scan complete: {} files, {} classes, {} functions, {} methods, {} fields, {} relationships",
+            result.metadata.total_files,
+            stats.classes,
+            stats.functions,
+            stats.methods,
+            stats.fields,
+            stats.relationships,
+        ));
+        print_info(&format!(
+            "Languages: {:?} | External imports: {} | Internal imports: {}",
+            result.metadata.languages_detected.iter().map(|l| l.name()).collect::<Vec<_>>(),
+            stats.imports_external,
+            stats.imports_internal,
+        ));
+
+        Ok(())
+    }
+
     /// Apply a single migration operation directly (used for add commands)
     fn apply_single_operation(&self, operation: MigrationOperation, target: Option<String>) -> Result<()> {
         // Determine target file
