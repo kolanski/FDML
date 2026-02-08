@@ -67,20 +67,60 @@ pub fn link_code(
 // ─── Name normalization ───────────────────────────────────────────
 
 /// Normalize a name for comparison: CamelCase → snake_case, strip underscores
+/// Handles acronyms: SlowAPIMiddleware → slow_api_middleware (not slow_a_p_i_middleware)
 fn normalize_name(name: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
     let mut result = String::new();
-    for (i, ch) in name.chars().enumerate() {
+    let len = chars.len();
+
+    for i in 0..len {
+        let ch = chars[i];
         if ch.is_uppercase() && i > 0 {
-            let prev = name.chars().nth(i - 1);
-            if let Some(p) = prev {
-                if p.is_lowercase() || p.is_ascii_digit() {
-                    result.push('_');
+            let prev = chars[i - 1];
+            let next = chars.get(i + 1);
+            if prev.is_lowercase() || prev.is_ascii_digit() {
+                // camelCase boundary: aB → a_b
+                result.push('_');
+            } else if prev.is_uppercase() {
+                // Inside acronym: check if next char is lowercase (end of acronym)
+                // e.g. "API" in "SlowAPIMiddleware": at 'I' next='M'(lower) → insert _ before 'I'? No.
+                // Actually at 'M' prev='I'(upper), next='i'(lower) → prev.is_upper + next.is_lower → insert _
+                if let Some(&n) = next {
+                    if n.is_lowercase() {
+                        result.push('_');
+                    }
                 }
             }
         }
         result.push(ch.to_ascii_lowercase());
     }
     result.replace('-', "_").trim_matches('_').to_string()
+}
+
+/// Check if a file path looks like a test file
+fn is_test_path(file_path: &str) -> bool {
+    let path = Path::new(file_path);
+    // Check directory components
+    for component in path.components() {
+        let s = component.as_os_str().to_str().unwrap_or("");
+        if s == "tests" || s == "test" || s == "__tests__" || s == "spec" || s == "specs" {
+            return true;
+        }
+    }
+    // Check filename
+    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+        if stem.starts_with("test_") || stem.ends_with("_test") || stem.ends_with("_spec") {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if a class/function name looks like a test
+fn is_test_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.starts_with("test") || lower.ends_with("test") || lower.ends_with("tests")
+        || lower.starts_with("test_") || lower.ends_with("_test")
 }
 
 /// Compute similarity score between two normalized names (0.0 - 1.0)
@@ -182,11 +222,16 @@ fn link_entities(
     unlinked_code: &mut Vec<UnlinkedCode>,
     unlinked_spec: &mut Vec<UnlinkedSpec>,
 ) {
-    // Collect all classes from scan
+    // Collect all classes from scan (skip test files)
     let mut code_classes: Vec<(&CodeElement, &str, &str)> = Vec::new(); // (element, file_path, module_path)
     for file in &scan.files {
+        if is_test_path(&file.file_path) {
+            continue;
+        }
         collect_classes(&file.elements, &file.file_path, &file.module_path, &mut code_classes);
     }
+    // Also filter out test classes by name
+    code_classes.retain(|(el, _, _)| !is_test_name(&el.name));
 
     // Spec entities for matching
     let spec_entities: Vec<(&str, &str)> = match spec {
@@ -378,6 +423,11 @@ fn link_actions(
     };
 
     for file in &scan.files {
+        // Skip test files
+        if is_test_path(&file.file_path) {
+            continue;
+        }
+
         let module = if !file.module_path.is_empty() {
             &file.module_path
         } else {
@@ -387,13 +437,16 @@ fn link_actions(
         // Top-level functions
         for el in &file.elements {
             if matches!(el.element_type, ElementType::Function) {
+                if is_test_name(&el.name) { continue; }
                 process_action_candidate(el, &file.file_path, module, None, &spec_actions, actions, unlinked_code);
             }
 
             // Public methods inside classes
             if matches!(el.element_type, ElementType::Class) {
+                if is_test_name(&el.name) { continue; }
                 for child in &el.children {
                     if matches!(child.element_type, ElementType::Method) {
+                        if is_test_name(&child.name) { continue; }
                         let scope = child.scope.as_ref();
                         let is_public = matches!(scope, Some(Scope::Public) | None);
                         let is_dunder = child.name.starts_with("__") && child.name.ends_with("__");
@@ -498,6 +551,11 @@ fn suggest_features(
     let mut module_actions: HashMap<String, Vec<String>> = HashMap::new();
 
     for file in &scan.files {
+        // Skip test files from feature suggestions
+        if is_test_path(&file.file_path) {
+            continue;
+        }
+
         let module = if !file.module_path.is_empty() {
             file.module_path.clone()
         } else {
