@@ -748,59 +748,54 @@ impl CommandRunner {
         Ok(())
     }
 
-    /// Call Anthropic API directly via curl and return response
+    /// Call LLM — tries Anthropic API first (if key set), falls back to claude CLI
     fn call_llm(&self, prompt: &str, fast: bool, model: Option<&str>) -> Result<String> {
-        use std::process::Command;
-        use std::io::Write;
-
-        // Get API key
-        let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-            crate::error::FdmlError::project_error(
-                "ANTHROPIC_API_KEY not set. Set it: export ANTHROPIC_API_KEY=sk-ant-...".to_string()
-            )
-        })?;
-
-        // Determine model
-        let model_name = if let Some(m) = model {
-            m.to_string()
-        } else if fast {
-            "claude-haiku-4-5-20251001".to_string()
-        } else {
-            "claude-sonnet-4-5-20250929".to_string()
-        };
-
         let prompt_lines = prompt.lines().count();
         let prompt_bytes = prompt.len();
         eprintln!("  ℹ Prompt: {} lines, {:.1} KB", prompt_lines, prompt_bytes as f64 / 1024.0);
-        eprintln!("  ℹ Model: {}", model_name);
-        eprintln!("  ℹ Calling Anthropic API...");
 
-        // Build JSON request body
+        // Try ANTHROPIC_API_KEY first (fast, no Node.js overhead)
+        if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
+            return self.call_anthropic_api(&api_key, prompt, fast, model);
+        }
+
+        // Fall back to claude CLI
+        self.call_claude_cli(prompt, fast, model)
+    }
+
+    /// Call Anthropic API directly via curl (requires ANTHROPIC_API_KEY)
+    fn call_anthropic_api(&self, api_key: &str, prompt: &str, fast: bool, model: Option<&str>) -> Result<String> {
+        use std::process::Command;
+
+        let model_name = match model {
+            Some("haiku") => "claude-haiku-4-5-20251001".to_string(),
+            Some("sonnet") => "claude-sonnet-4-5-20250929".to_string(),
+            Some("opus") => "claude-opus-4-6".to_string(),
+            Some(m) => m.to_string(),
+            None if fast => "claude-haiku-4-5-20251001".to_string(),
+            None => "claude-sonnet-4-5-20250929".to_string(),
+        };
+
+        eprintln!("  ℹ Model: {}", model_name);
+        eprintln!("  ℹ Provider: Anthropic API (curl)");
+
         let system_msg = "You are an FDML specification generator. Output ONLY valid YAML — no markdown fences, no explanations. Start directly with YAML content.";
 
-        // Escape prompt for JSON
-        let escaped_prompt = prompt
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('\n', "\\n")
-            .replace('\r', "\\r")
-            .replace('\t', "\\t");
-        let escaped_system = system_msg
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"");
+        // Use serde_json to build the request (safe escaping)
+        let request = serde_json::json!({
+            "model": model_name,
+            "max_tokens": 8192,
+            "system": system_msg,
+            "messages": [{"role": "user", "content": prompt}]
+        });
 
-        let request_body = format!(
-            r#"{{"model":"{}","max_tokens":8192,"system":"{}","messages":[{{"role":"user","content":"{}"}}]}}"#,
-            model_name, escaped_system, escaped_prompt
-        );
-
-        // Write request body to temp file (avoids shell escaping issues with large JSON)
         let tmp_body = std::env::temp_dir().join("fdml_llm_request.json");
-        fs::write(&tmp_body, &request_body).map_err(|e| {
-            crate::error::FdmlError::project_error(format!("Failed to write temp request: {}", e))
+        fs::write(&tmp_body, request.to_string()).map_err(|e| {
+            crate::error::FdmlError::project_error(format!("Failed to write request: {}", e))
         })?;
 
-        // Call Anthropic API via curl
+        eprintln!("  ℹ Sending request...");
+
         let output = Command::new("curl")
             .arg("-s")
             .arg("-X").arg("POST")
@@ -811,59 +806,116 @@ impl CommandRunner {
             .arg("-d").arg(format!("@{}", tmp_body.display()))
             .output()
             .map_err(|e| {
-                crate::error::FdmlError::project_error(format!("Failed to run curl: {}", e))
+                crate::error::FdmlError::project_error(format!("curl failed: {}", e))
             })?;
 
-        // Clean up temp file
         let _ = fs::remove_file(&tmp_body);
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(crate::error::FdmlError::project_error(
-                format!("curl failed: {}", stderr)
-            ));
+            return Err(crate::error::FdmlError::project_error(format!("curl error: {}", stderr)));
         }
 
         let response_str = String::from_utf8_lossy(&output.stdout).to_string();
-
-        // Parse JSON response
         let json: serde_json::Value = serde_json::from_str(&response_str).map_err(|e| {
-            crate::error::FdmlError::project_error(
-                format!("Failed to parse API response: {}. Raw: {}", e, &response_str[..200.min(response_str.len())])
-            )
+            crate::error::FdmlError::project_error(format!("Bad API response: {}", e))
         })?;
 
-        // Check for API errors
         if let Some(error) = json.get("error") {
-            let msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
-            return Err(crate::error::FdmlError::project_error(
-                format!("Anthropic API error: {}", msg)
-            ));
+            let msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown");
+            return Err(crate::error::FdmlError::project_error(format!("API error: {}", msg)));
         }
 
-        // Extract text content
         let text = json.get("content")
             .and_then(|c| c.as_array())
             .and_then(|arr| arr.first())
             .and_then(|item| item.get("text"))
             .and_then(|t| t.as_str())
-            .ok_or_else(|| {
-                crate::error::FdmlError::project_error(
-                    format!("Unexpected API response structure: {}", &response_str[..500.min(response_str.len())])
-                )
+            .ok_or_else(|| crate::error::FdmlError::project_error("No text in API response".to_string()))?;
+
+        if let Some(usage) = json.get("usage") {
+            let inp = usage.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+            let out = usage.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+            eprintln!("  ℹ Tokens: {} in, {} out", inp, out);
+        }
+        eprintln!("  ℹ Response: {} lines", text.lines().count());
+
+        print_success("LLM response received (API)");
+        Ok(Self::strip_yaml_fences(text))
+    }
+
+    /// Call claude CLI subprocess
+    /// Usage: cat prompt.md | claude -p "instruction" --output-format text --max-turns 1
+    /// See: https://code.claude.com/docs/en/cli-reference
+    fn call_claude_cli(&self, prompt: &str, fast: bool, model: Option<&str>) -> Result<String> {
+        use std::process::Command;
+
+        let model_name = if let Some(m) = model {
+            m.to_string()
+        } else if fast {
+            "haiku".to_string()
+        } else {
+            "sonnet".to_string()
+        };
+
+        eprintln!("  ℹ Provider: claude CLI");
+        eprintln!("  ℹ Model: {}", model_name);
+
+        // Write prompt to temp file for piping via stdin
+        let tmp_prompt = std::env::temp_dir().join("fdml_link_prompt.md");
+        fs::write(&tmp_prompt, prompt).map_err(|e| {
+            crate::error::FdmlError::project_error(format!("Failed to write prompt: {}", e))
+        })?;
+
+        let system_prompt = "You are an FDML specification generator. Output ONLY valid YAML — no markdown fences, no explanations. Start directly with YAML content.";
+
+        eprintln!("  ℹ Running: cat prompt | claude -p ... --max-turns 1 --output-format text");
+
+        // cat file | claude -p "query" --model X --output-format text --max-turns 1 --no-session-persistence
+        let shell_cmd = format!(
+            "cat {} | claude -p \"Generate a complete FDML YAML specification from this analysis\" \
+             --model {} \
+             --system-prompt \"{}\" \
+             --output-format text \
+             --max-turns 1 \
+             --no-session-persistence",
+            tmp_prompt.display(),
+            model_name,
+            system_prompt.replace('"', "\\\""),
+        );
+
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(&shell_cmd)
+            .output()
+            .map_err(|e| {
+                crate::error::FdmlError::project_error(format!("claude CLI failed to start: {}", e))
             })?;
 
-        let resp_lines = text.lines().count();
-        eprintln!("  ℹ Response: {} lines, {:.1} KB", resp_lines, text.len() as f64 / 1024.0);
+        let _ = fs::remove_file(&tmp_prompt);
 
-        // Usage info
-        if let Some(usage) = json.get("usage") {
-            let input_tokens = usage.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-            let output_tokens = usage.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-            eprintln!("  ℹ Tokens: {} input, {} output", input_tokens, output_tokens);
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(crate::error::FdmlError::project_error(
+                format!("claude CLI error (exit {}): {}", output.status, stderr)
+            ));
         }
 
-        // Strip markdown yaml fences if present
+        let response = String::from_utf8_lossy(&output.stdout).to_string();
+        if response.trim().is_empty() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(crate::error::FdmlError::project_error(
+                format!("claude CLI empty response. stderr: {}", stderr)
+            ));
+        }
+
+        eprintln!("  ℹ Response: {} lines", response.lines().count());
+        print_success("LLM response received (CLI)");
+        Ok(Self::strip_yaml_fences(&response))
+    }
+
+    /// Strip markdown YAML fences from LLM output
+    fn strip_yaml_fences(text: &str) -> String {
         let cleaned = text.trim();
         let cleaned = if cleaned.starts_with("```yaml") || cleaned.starts_with("```yml") {
             let start = cleaned.find('\n').unwrap_or(0) + 1;
@@ -876,10 +928,7 @@ impl CommandRunner {
         } else {
             cleaned
         };
-
-        print_success("LLM response received");
-
-        Ok(cleaned.trim().to_string())
+        cleaned.trim().to_string()
     }
 
     /// Apply a single migration operation directly (used for add commands)
