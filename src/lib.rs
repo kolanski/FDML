@@ -6,6 +6,7 @@ pub mod validator;
 pub mod generators;
 pub mod migration;
 pub mod scanner;
+pub mod linker;
 
 pub use cli::{Cli, CommandRunner};
 pub use error::{FdmlError, Result};

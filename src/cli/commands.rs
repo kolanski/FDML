@@ -33,6 +33,9 @@ impl CommandRunner {
             Commands::ParseCode { input, output, format, exclude } => {
                 self.run_parse_code(input, output, format, exclude)
             },
+            Commands::LinkCode { code, fdml, output, format } => {
+                self.run_link_code(code, fdml, output, format)
+            },
         }
     }
     
@@ -614,6 +617,99 @@ impl CommandRunner {
             result.metadata.languages_detected.iter().map(|l| l.name()).collect::<Vec<_>>(),
             stats.imports_external,
             stats.imports_internal,
+        ));
+
+        Ok(())
+    }
+
+    fn run_link_code(&self, code: String, fdml: Option<String>, output: Option<String>, format: String) -> Result<()> {
+        if self.verbose {
+            print_info(&format!("Linking code inventory: {}", code));
+            if let Some(ref spec) = fdml {
+                print_info(&format!("FDML spec: {}", spec));
+            }
+        }
+
+        // Load inventory
+        let inventory_content = fs::read_to_string(&code).map_err(|e| {
+            crate::error::FdmlError::project_error(format!("Failed to read inventory file '{}': {}", code, e))
+        })?;
+        let scan: crate::scanner::types::ScanResult = serde_yaml::from_str(&inventory_content)
+            .or_else(|_| serde_json::from_str(&inventory_content).map_err(|e| {
+                crate::error::FdmlError::project_error(format!("Failed to parse inventory (tried YAML and JSON): {}", e))
+            }))?;
+
+        // Load spec if provided
+        let spec_doc = if let Some(ref spec_path) = fdml {
+            let content = fs::read_to_string(spec_path).map_err(|e| {
+                crate::error::FdmlError::project_error(format!("Failed to read spec file '{}': {}", spec_path, e))
+            })?;
+            Some(crate::parser::parse_fdml_yaml(&content)?)
+        } else {
+            None
+        };
+
+        // Run linking
+        let report = crate::linker::link_code(
+            &scan,
+            spec_doc.as_ref(),
+            &code,
+            fdml.as_deref(),
+        );
+
+        // Generate metaprompt
+        let metaprompt = crate::linker::generate_metaprompt(&report, &scan);
+
+        // Format output — include both report and metaprompt
+        let output_str = match format.as_str() {
+            "json" => serde_json::to_string_pretty(&report)
+                .map_err(|e| crate::error::FdmlError::project_error(format!("JSON serialization error: {}", e)))?,
+            "prompt" => metaprompt.clone(),
+            "yaml" | _ => {
+                let yaml = serde_yaml::to_string(&report)
+                    .map_err(|e| crate::error::FdmlError::project_error(format!("YAML serialization error: {}", e)))?;
+                yaml
+            }
+        };
+
+        // Write to file or stdout
+        if let Some(ref output_path) = output {
+            fs::write(output_path, &output_str).map_err(|e| {
+                crate::error::FdmlError::project_error(format!("Failed to write output to {}: {}", output_path, e))
+            })?;
+            print_success(&format!("Linking report written to: {}", output_path));
+
+            // Also write metaprompt alongside if format is not "prompt"
+            if format != "prompt" {
+                let prompt_path = format!("{}.prompt.md", output_path.trim_end_matches(".yaml").trim_end_matches(".json"));
+                fs::write(&prompt_path, &metaprompt).map_err(|e| {
+                    crate::error::FdmlError::project_error(format!("Failed to write prompt to {}: {}", prompt_path, e))
+                })?;
+                print_success(&format!("LLM metaprompt written to: {}", prompt_path));
+            }
+        } else {
+            println!("{}", output_str);
+        }
+
+        // Print summary
+        let matched_entities = report.entities.iter().filter(|e| matches!(e.source, crate::linker::types::LinkSource::Matched)).count();
+        let matched_actions = report.actions.iter().filter(|a| matches!(a.source, crate::linker::types::LinkSource::Matched)).count();
+        print_success(&format!(
+            "Link complete: {} entity candidates ({} matched), {} action candidates ({} matched), {} feature suggestions",
+            report.entities.len(), matched_entities,
+            report.actions.len(), matched_actions,
+            report.features.len(),
+        ));
+        print_info(&format!(
+            "Traceability links: {} | Unlinked code: {} | Unlinked spec: {}",
+            report.traceability.len(),
+            report.unlinked_code.len(),
+            report.unlinked_spec.len(),
+        ));
+        print_info(&format!(
+            "Coverage — spec: {:.0}% | code: {:.0}%",
+            report.coverage.spec_coverage.percentage,
+            report.coverage.code_coverage.percentage,
         ));
 
         Ok(())
