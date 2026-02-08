@@ -151,6 +151,10 @@ pub enum Commands {
         /// Specific model to use with --llm (default: sonnet)
         #[arg(long)]
         model: Option<String>,
+
+        /// LLM provider: "cli" (claude CLI) or "api" (ANTHROPIC_API_KEY). Default: auto-detect
+        #[arg(long)]
+        provider: Option<String>,
     },
 }
 

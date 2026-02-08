@@ -33,8 +33,8 @@ impl CommandRunner {
             Commands::ParseCode { input, output, format, exclude } => {
                 self.run_parse_code(input, output, format, exclude)
             },
-            Commands::LinkCode { code, fdml, output, format, llm, fast, model } => {
-                self.run_link_code(code, fdml, output, format, llm, fast, model)
+            Commands::LinkCode { code, fdml, output, format, llm, fast, model, provider } => {
+                self.run_link_code(code, fdml, output, format, llm, fast, model, provider)
             },
         }
     }
@@ -631,6 +631,7 @@ impl CommandRunner {
         llm: bool,
         fast: bool,
         model: Option<String>,
+        provider: Option<String>,
     ) -> Result<()> {
         if self.verbose {
             print_info(&format!("Linking code inventory: {}", code));
@@ -669,9 +670,9 @@ impl CommandRunner {
         // Generate metaprompt
         let metaprompt = crate::linker::generate_metaprompt(&report, &scan);
 
-        // If --llm flag, send to claude CLI
+        // If --llm flag, send to LLM
         if llm {
-            let llm_result = self.call_llm(&metaprompt, fast, model.as_deref())?;
+            let llm_result = self.call_llm(&metaprompt, fast, model.as_deref(), provider.as_deref())?;
 
             // Write LLM result
             if let Some(ref output_path) = output {
@@ -748,19 +749,40 @@ impl CommandRunner {
         Ok(())
     }
 
-    /// Call LLM — tries Anthropic API first (if key set), falls back to claude CLI
-    fn call_llm(&self, prompt: &str, fast: bool, model: Option<&str>) -> Result<String> {
+    /// Call LLM — provider selection: "cli" forces claude CLI, "api" forces API, None = auto
+    fn call_llm(&self, prompt: &str, fast: bool, model: Option<&str>, provider: Option<&str>) -> Result<String> {
         let prompt_lines = prompt.lines().count();
         let prompt_bytes = prompt.len();
         eprintln!("  ℹ Prompt: {} lines, {:.1} KB", prompt_lines, prompt_bytes as f64 / 1024.0);
 
-        // Try ANTHROPIC_API_KEY first (fast, no Node.js overhead)
-        if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
-            return self.call_anthropic_api(&api_key, prompt, fast, model);
+        match provider {
+            Some("cli") => {
+                eprintln!("  ℹ Provider forced: claude CLI");
+                self.call_claude_cli(prompt, fast, model)
+            }
+            Some("api") => {
+                let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
+                    crate::error::FdmlError::project_error(
+                        "ANTHROPIC_API_KEY not set. Use --provider cli to use claude CLI instead.".to_string()
+                    )
+                })?;
+                self.call_anthropic_api(&api_key, prompt, fast, model)
+            }
+            _ => {
+                // Auto: try API key first, fall back to CLI
+                if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
+                    match self.call_anthropic_api(&api_key, prompt, fast, model) {
+                        Ok(result) => Ok(result),
+                        Err(e) => {
+                            eprintln!("  ⚠ API failed: {}. Falling back to claude CLI...", e);
+                            self.call_claude_cli(prompt, fast, model)
+                        }
+                    }
+                } else {
+                    self.call_claude_cli(prompt, fast, model)
+                }
+            }
         }
-
-        // Fall back to claude CLI
-        self.call_claude_cli(prompt, fast, model)
     }
 
     /// Call Anthropic API directly via curl (requires ANTHROPIC_API_KEY)
