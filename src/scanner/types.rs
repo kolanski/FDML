@@ -81,6 +81,8 @@ pub struct CodeElement {
     pub parameters: Vec<Parameter>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub return_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub bases: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]

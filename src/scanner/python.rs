@@ -149,6 +149,7 @@ impl PythonScanner {
             signature: None,
             parameters: Vec::new(),
             return_type: None,
+            default_value: None,
             bases,
             decorators,
             children,
@@ -214,6 +215,7 @@ impl PythonScanner {
             signature: Some(signature),
             parameters,
             return_type,
+            default_value: None,
             bases: Vec::new(),
             decorators,
             children: Vec::new(),
@@ -312,19 +314,23 @@ impl PythonScanner {
                                 let text = Self::node_text(&left_node, source);
                                 if text.starts_with("self.") {
                                     let field_name = text.strip_prefix("self.").unwrap_or(text);
-                                    let type_hint = right.map(|r| {
-                                        // Try to infer type from value
-                                        match r.kind() {
-                                            "string" => "str".to_string(),
-                                            "integer" => "int".to_string(),
-                                            "float" => "float".to_string(),
-                                            "true" | "false" => "bool".to_string(),
-                                            "list" => "list".to_string(),
-                                            "dictionary" => "dict".to_string(),
-                                            "none" => "None".to_string(),
-                                            _ => Self::node_text(&r, source).to_string(),
+                                    let (type_hint, default_val) = match right {
+                                        Some(r) => {
+                                            let raw = Self::node_text(&r, source).to_string();
+                                            let inferred = match r.kind() {
+                                                "string" => Some("str".to_string()),
+                                                "integer" => Some("int".to_string()),
+                                                "float" => Some("float".to_string()),
+                                                "true" | "false" => Some("bool".to_string()),
+                                                "list" => Some("list".to_string()),
+                                                "dictionary" => Some("dict".to_string()),
+                                                "none" => Some("None".to_string()),
+                                                _ => None,
+                                            };
+                                            (inferred, Some(raw))
                                         }
-                                    });
+                                        None => (None, None),
+                                    };
                                     let scope = if field_name.starts_with("__") {
                                         Scope::Private
                                     } else if field_name.starts_with('_') {
@@ -344,6 +350,7 @@ impl PythonScanner {
                                         signature: None,
                                         parameters: Vec::new(),
                                         return_type: type_hint,
+                                        default_value: default_val,
                                         bases: Vec::new(),
                                         decorators: Vec::new(),
                                         children: Vec::new(),
@@ -365,8 +372,23 @@ impl PythonScanner {
                 let left = child.child_by_field_name("left")?;
                 if left.kind() == "identifier" {
                     let name = Self::node_text(&left, source).to_string();
-                    let right = child.child_by_field_name("right");
-                    let value_hint = right.map(|r| Self::node_text(&r, source).to_string());
+                    let (type_hint, default_val) = match child.child_by_field_name("right") {
+                        Some(r) => {
+                            let raw = Self::node_text(&r, source).to_string();
+                            let inferred = match r.kind() {
+                                "string" => Some("str".to_string()),
+                                "integer" => Some("int".to_string()),
+                                "float" => Some("float".to_string()),
+                                "true" | "false" => Some("bool".to_string()),
+                                "list" => Some("list".to_string()),
+                                "dictionary" => Some("dict".to_string()),
+                                "none" => Some("None".to_string()),
+                                _ => None,
+                            };
+                            (inferred, Some(raw))
+                        }
+                        None => (None, None),
+                    };
                     return Some(CodeElement {
                         element_type: ElementType::Field,
                         name,
@@ -378,7 +400,8 @@ impl PythonScanner {
                         docstring: None,
                         signature: None,
                         parameters: Vec::new(),
-                        return_type: value_hint,
+                        return_type: type_hint,
+                        default_value: default_val,
                         bases: Vec::new(),
                         decorators: Vec::new(),
                         children: Vec::new(),
