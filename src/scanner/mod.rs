@@ -3,7 +3,7 @@ pub mod python;
 pub mod java;
 pub mod csharp;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::error::Result;
@@ -30,24 +30,32 @@ pub fn scan_project(codebase_path: &str, exclude_patterns: &[String]) -> Result<
         ));
     }
 
-    // Collect all source files
+    let base_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+    // Collect all source files (absolute paths)
     let mut source_files: Vec<(String, Language)> = Vec::new();
-    collect_files(path, &mut source_files, exclude_patterns)?;
+    collect_files(&base_path, &mut source_files, exclude_patterns)?;
 
     let mut all_files = Vec::new();
     let mut languages_detected: HashSet<String> = HashSet::new();
 
-    // Parse each file
-    for (file_path, language) in &source_files {
-        let source = std::fs::read_to_string(file_path).map_err(|e| {
-            crate::error::FdmlError::project_error(format!("Failed to read {}: {}", file_path, e))
+    // Parse each file with relative paths
+    for (abs_path, language) in &source_files {
+        let source = std::fs::read_to_string(abs_path).map_err(|e| {
+            crate::error::FdmlError::project_error(format!("Failed to read {}: {}", abs_path, e))
         })?;
 
-        let analysis = match language {
-            Language::Python => python::PythonScanner::parse_file(&source, file_path)?,
-            Language::Java => java::JavaScanner::parse_file(&source, file_path)?,
-            Language::CSharp => csharp::CSharpScanner::parse_file(&source, file_path)?,
+        // Convert to relative path
+        let rel_path = make_relative(&base_path, abs_path);
+        let module_path = compute_module_path(&rel_path, language);
+
+        let mut analysis = match language {
+            Language::Python => python::PythonScanner::parse_file(&source, &rel_path)?,
+            Language::Java => java::JavaScanner::parse_file(&source, &rel_path)?,
+            Language::CSharp => csharp::CSharpScanner::parse_file(&source, &rel_path)?,
         };
+
+        analysis.module_path = module_path;
 
         languages_detected.insert(language.name().to_string());
         all_files.push(analysis);
@@ -55,6 +63,9 @@ pub fn scan_project(codebase_path: &str, exclude_patterns: &[String]) -> Result<
 
     // Build relationships from imports and inheritance
     let relationships = build_relationships(&all_files);
+
+    // Build module hierarchy tree
+    let modules = build_module_tree(&all_files);
 
     // Compute statistics
     let statistics = compute_statistics(&all_files, &relationships);
@@ -75,10 +86,133 @@ pub fn scan_project(codebase_path: &str, exclude_patterns: &[String]) -> Result<
             languages_detected: languages,
             total_files: all_files.len(),
         },
+        modules,
         files: all_files,
         relationships,
         statistics,
     })
+}
+
+/// Convert absolute path to relative from base
+fn make_relative(base: &Path, abs_path: &str) -> String {
+    let abs = Path::new(abs_path);
+    let canonical = std::fs::canonicalize(abs).unwrap_or_else(|_| abs.to_path_buf());
+    canonical.strip_prefix(base)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| abs_path.to_string())
+}
+
+/// Compute a language-appropriate module path from relative file path
+fn compute_module_path(rel_path: &str, language: &Language) -> String {
+    match language {
+        Language::Python => {
+            // foo/bar/__init__.py → foo.bar
+            // foo/bar/baz.py → foo.bar.baz
+            let without_ext = rel_path.trim_end_matches(".py");
+            let module = without_ext.replace('/', ".").replace('\\', ".");
+            if module.ends_with(".__init__") {
+                module.trim_end_matches(".__init__").to_string()
+            } else if module == "__init__" {
+                // Root __init__.py
+                String::new()
+            } else {
+                module
+            }
+        }
+        Language::Java => {
+            // Strip common Java source roots
+            let stripped = rel_path
+                .trim_start_matches("src/main/java/")
+                .trim_start_matches("src/")
+                .trim_end_matches(".java");
+            stripped.replace('/', ".").replace('\\', ".")
+        }
+        Language::CSharp => {
+            let stripped = rel_path.trim_end_matches(".cs");
+            stripped.replace('/', ".").replace('\\', ".")
+        }
+    }
+}
+
+/// Build a module hierarchy tree from file analyses
+fn build_module_tree(files: &[FileAnalysis]) -> Vec<ModuleNode> {
+    let mut module_map: HashMap<String, (Option<String>, Option<Language>)> = HashMap::new();
+
+    for file in files {
+        let mp = if file.module_path.is_empty() {
+            // Root __init__.py — use the filename stem
+            Path::new(&file.file_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string()
+        } else {
+            file.module_path.clone()
+        };
+
+        if mp.is_empty() {
+            continue;
+        }
+
+        module_map.insert(mp.clone(), (Some(file.file_path.clone()), Some(file.language.clone())));
+
+        // Ensure parent modules exist in the map
+        let parts: Vec<&str> = mp.split('.').collect();
+        for i in 1..parts.len() {
+            let parent = parts[..i].join(".");
+            module_map.entry(parent).or_insert((None, None));
+        }
+    }
+
+    // Find root-level module names (first segment)
+    let mut root_names: Vec<String> = module_map.keys()
+        .filter_map(|p| {
+            let first = p.split('.').next()?;
+            Some(first.to_string())
+        })
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    root_names.sort();
+
+    let mut roots = Vec::new();
+    for root_name in &root_names {
+        roots.push(build_tree_node(root_name, &module_map));
+    }
+    roots
+}
+
+fn build_tree_node(module_path: &str, module_map: &HashMap<String, (Option<String>, Option<Language>)>) -> ModuleNode {
+    let name = module_path.split('.').last().unwrap_or(module_path).to_string();
+
+    let (file_path, language) = module_map.get(module_path)
+        .cloned()
+        .unwrap_or((None, None));
+
+    // Find direct children
+    let prefix = format!("{}.", module_path);
+    let mut child_paths: HashSet<String> = HashSet::new();
+
+    for key in module_map.keys() {
+        if let Some(rest) = key.strip_prefix(&prefix) {
+            if let Some(child_seg) = rest.split('.').next() {
+                child_paths.insert(format!("{}.{}", module_path, child_seg));
+            }
+        }
+    }
+
+    let mut children: Vec<ModuleNode> = child_paths.iter()
+        .map(|cp| build_tree_node(cp, module_map))
+        .collect();
+    children.sort_by(|a, b| a.name.cmp(&b.name));
+
+    ModuleNode {
+        name,
+        module_path: module_path.to_string(),
+        file_path,
+        language,
+        children,
+    }
 }
 
 fn collect_files(
@@ -134,28 +268,24 @@ fn collect_files(
 fn build_relationships(files: &[FileAnalysis]) -> Vec<Relationship> {
     let mut relationships = Vec::new();
 
-    // Build a map of class names to file paths
-    let mut class_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for file in files {
-        for element in &file.elements {
-            if matches!(element.element_type, ElementType::Class | ElementType::Interface | ElementType::Enum) {
-                class_map.insert(element.name.clone(), file.file_path.clone());
-            }
-        }
-    }
-
-    for file in files {
-        let file_stem = Path::new(&file.file_path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(&file.file_path);
+        // Use module_path for relationships, fall back to file stem
+        let module = if !file.module_path.is_empty() {
+            file.module_path.clone()
+        } else {
+            Path::new(&file.file_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&file.file_path)
+                .to_string()
+        };
 
         // Inheritance relationships
         for element in &file.elements {
             for base in &element.bases {
                 let base_name = base.split('.').last().unwrap_or(base);
                 relationships.push(Relationship {
-                    from: format!("{}:{}", file_stem, element.name),
+                    from: format!("{}:{}", module, element.name),
                     to: base_name.to_string(),
                     relation_type: if matches!(element.element_type, ElementType::Interface) {
                         RelationType::Implements
@@ -176,7 +306,7 @@ fn build_relationships(files: &[FileAnalysis]) -> Vec<Relationship> {
             };
 
             relationships.push(Relationship {
-                from: file_stem.to_string(),
+                from: module.clone(),
                 to: import.module.clone(),
                 relation_type,
                 description: if import.names.is_empty() {

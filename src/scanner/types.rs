@@ -128,15 +128,30 @@ pub struct ImportInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileAnalysis {
     pub file_path: String,
+    pub module_path: String,
     pub language: Language,
     pub elements: Vec<CodeElement>,
     pub imports: Vec<ImportInfo>,
+}
+
+/// A node in the module hierarchy tree
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleNode {
+    pub name: String,
+    pub module_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<Language>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub children: Vec<ModuleNode>,
 }
 
 /// Result of scanning an entire project
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanResult {
     pub metadata: ScanMetadata,
+    pub modules: Vec<ModuleNode>,
     pub files: Vec<FileAnalysis>,
     pub relationships: Vec<Relationship>,
     pub statistics: ScanStatistics,

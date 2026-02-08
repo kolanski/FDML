@@ -24,6 +24,7 @@ impl PythonScanner {
 
         Ok(FileAnalysis {
             file_path: file_path.to_string(),
+            module_path: String::new(), // set by scan_project
             language: Language::Python,
             elements,
             imports,
@@ -105,12 +106,18 @@ impl PythonScanner {
             }
         }
 
-        // Extract body: methods, fields, inner classes
+        // Extract body: methods, fields, inner classes, nested functions
         let mut children = Vec::new();
         if let Some(body) = class_node.child_by_field_name("body") {
             let mut cursor = body.walk();
             for child in body.children(&mut cursor) {
                 match child.kind() {
+                    "class_definition" | "decorated_definition" if Self::is_class_def(&child) => {
+                        // Nested class inside a class body
+                        if let Some(nested) = Self::extract_class(&child, source, file_path) {
+                            children.push(nested);
+                        }
+                    }
                     "function_definition" | "decorated_definition" => {
                         if let Some(method) = Self::extract_method(&child, source, file_path) {
                             // Extract fields from __init__
@@ -119,6 +126,11 @@ impl PythonScanner {
                                 for f in fields {
                                     children.push(f);
                                 }
+                            }
+                            // Extract nested classes/functions inside this method
+                            let nested = Self::extract_nested_defs(&child, source, file_path);
+                            for n in nested {
+                                children.push(n);
                             }
                             children.push(method);
                         }
@@ -410,6 +422,61 @@ impl PythonScanner {
             }
         }
         None
+    }
+
+    /// Check if a node is a class definition (or decorated class)
+    fn is_class_def(node: &Node) -> bool {
+        if node.kind() == "class_definition" {
+            return true;
+        }
+        if node.kind() == "decorated_definition" {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "class_definition" {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Extract nested class/function definitions from inside a method body
+    fn extract_nested_defs(func_node: &Node, source: &str, file_path: &str) -> Vec<CodeElement> {
+        let mut nested = Vec::new();
+
+        // Get the actual function_definition node
+        let func = if func_node.kind() == "decorated_definition" {
+            let mut cursor = func_node.walk();
+            let found = func_node.children(&mut cursor)
+                .find(|c| c.kind() == "function_definition");
+            match found {
+                Some(f) => f,
+                None => return nested,
+            }
+        } else {
+            func_node.clone()
+        };
+
+        let Some(body) = func.child_by_field_name("body") else { return nested };
+
+        let mut cursor = body.walk();
+        for stmt in body.children(&mut cursor) {
+            match stmt.kind() {
+                "class_definition" | "decorated_definition" if Self::is_class_def(&stmt) => {
+                    if let Some(cls) = Self::extract_class(&stmt, source, file_path) {
+                        nested.push(cls);
+                    }
+                }
+                "function_definition" | "decorated_definition" => {
+                    if let Some(inner_fn) = Self::extract_function(&stmt, source, file_path) {
+                        nested.push(inner_fn);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        nested
     }
 
     fn extract_docstring(node: &Node, source: &str) -> Option<String> {

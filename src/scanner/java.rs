@@ -24,6 +24,7 @@ impl JavaScanner {
 
         Ok(FileAnalysis {
             file_path: file_path.to_string(),
+            module_path: String::new(), // set by scan_project
             language: Language::Java,
             elements,
             imports,
