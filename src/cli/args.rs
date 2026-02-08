@@ -120,6 +120,26 @@ pub enum Commands {
         #[arg(short, long, value_delimiter = ',')]
         exclude: Vec<String>,
     },
+
+    /// Link code inventory to FDML spec — match classes→entities, methods→actions, modules→features
+    #[command(name = "link-code")]
+    LinkCode {
+        /// Path to code inventory file (from parse-code output)
+        #[arg(long)]
+        code: String,
+
+        /// Path to FDML spec file (can be empty/missing — generates draft)
+        #[arg(long)]
+        fdml: Option<String>,
+
+        /// Output file path (default: stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Output format (yaml, json)
+        #[arg(short, long, default_value = "yaml")]
+        format: String,
+    },
 }
 
 #[derive(Subcommand)]
