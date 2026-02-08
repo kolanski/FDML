@@ -229,6 +229,22 @@ The FDML CLI provides a comprehensive toolset for working with FDML specificatio
 - `fdml migrate rollback --count <n> --path <dir>` - Rollback migrations
 - `fdml migrate status --path <dir>` - Show migration status
 
+**Code Scanning (reverse engineering):**
+- `fdml parse-code <path>` - Scan existing source code and extract a structured inventory
+- `--format <yaml|json>` - Output format (default: yaml)
+- `--output <file>` - Write to file instead of stdout
+- `--exclude <dir1,dir2>` - Additional directories to skip
+
+Supported languages: Python, Java, C#. Auto-detected by file extension.
+
+Extracts: classes, functions, methods, fields, imports, inheritance, module hierarchy.
+Produces relative file paths and dotted module paths (e.g. `slowapi.extension`).
+
+Example:
+```bash
+fdml parse-code ./my-project --format yaml --output inventory.yaml
+```
+
 **Traceability:**
 - `fdml trace validate` - Validate traceability links (framework ready)
 - `fdml trace graph` - Generate dependency graphs (framework ready)
