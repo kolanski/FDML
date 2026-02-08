@@ -33,8 +33,8 @@ impl CommandRunner {
             Commands::ParseCode { input, output, format, exclude } => {
                 self.run_parse_code(input, output, format, exclude)
             },
-            Commands::LinkCode { code, fdml, output, format } => {
-                self.run_link_code(code, fdml, output, format)
+            Commands::LinkCode { code, fdml, output, format, llm, fast, model } => {
+                self.run_link_code(code, fdml, output, format, llm, fast, model)
             },
         }
     }
@@ -622,7 +622,16 @@ impl CommandRunner {
         Ok(())
     }
 
-    fn run_link_code(&self, code: String, fdml: Option<String>, output: Option<String>, format: String) -> Result<()> {
+    fn run_link_code(
+        &self,
+        code: String,
+        fdml: Option<String>,
+        output: Option<String>,
+        format: String,
+        llm: bool,
+        fast: bool,
+        model: Option<String>,
+    ) -> Result<()> {
         if self.verbose {
             print_info(&format!("Linking code inventory: {}", code));
             if let Some(ref spec) = fdml {
@@ -659,6 +668,30 @@ impl CommandRunner {
 
         // Generate metaprompt
         let metaprompt = crate::linker::generate_metaprompt(&report, &scan);
+
+        // If --llm flag, send to claude CLI
+        if llm {
+            let llm_result = self.call_llm(&metaprompt, fast, model.as_deref())?;
+
+            // Write LLM result
+            if let Some(ref output_path) = output {
+                fs::write(output_path, &llm_result).map_err(|e| {
+                    crate::error::FdmlError::project_error(format!("Failed to write LLM output to {}: {}", output_path, e))
+                })?;
+                print_success(&format!("LLM-generated FDML spec written to: {}", output_path));
+
+                // Also save the prompt used
+                let prompt_path = format!("{}.prompt.md", output_path.trim_end_matches(".yaml").trim_end_matches(".fdml"));
+                fs::write(&prompt_path, &metaprompt).map_err(|e| {
+                    crate::error::FdmlError::project_error(format!("Failed to write prompt to {}: {}", prompt_path, e))
+                })?;
+                print_info(&format!("Prompt saved to: {}", prompt_path));
+            } else {
+                println!("{}", llm_result);
+            }
+
+            return Ok(());
+        }
 
         // Format output — include both report and metaprompt
         let output_str = match format.as_str() {
@@ -713,6 +746,140 @@ impl CommandRunner {
         ));
 
         Ok(())
+    }
+
+    /// Call Anthropic API directly via curl and return response
+    fn call_llm(&self, prompt: &str, fast: bool, model: Option<&str>) -> Result<String> {
+        use std::process::Command;
+        use std::io::Write;
+
+        // Get API key
+        let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
+            crate::error::FdmlError::project_error(
+                "ANTHROPIC_API_KEY not set. Set it: export ANTHROPIC_API_KEY=sk-ant-...".to_string()
+            )
+        })?;
+
+        // Determine model
+        let model_name = if let Some(m) = model {
+            m.to_string()
+        } else if fast {
+            "claude-haiku-4-5-20251001".to_string()
+        } else {
+            "claude-sonnet-4-5-20250929".to_string()
+        };
+
+        let prompt_lines = prompt.lines().count();
+        let prompt_bytes = prompt.len();
+        eprintln!("  ℹ Prompt: {} lines, {:.1} KB", prompt_lines, prompt_bytes as f64 / 1024.0);
+        eprintln!("  ℹ Model: {}", model_name);
+        eprintln!("  ℹ Calling Anthropic API...");
+
+        // Build JSON request body
+        let system_msg = "You are an FDML specification generator. Output ONLY valid YAML — no markdown fences, no explanations. Start directly with YAML content.";
+
+        // Escape prompt for JSON
+        let escaped_prompt = prompt
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t");
+        let escaped_system = system_msg
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+
+        let request_body = format!(
+            r#"{{"model":"{}","max_tokens":8192,"system":"{}","messages":[{{"role":"user","content":"{}"}}]}}"#,
+            model_name, escaped_system, escaped_prompt
+        );
+
+        // Write request body to temp file (avoids shell escaping issues with large JSON)
+        let tmp_body = std::env::temp_dir().join("fdml_llm_request.json");
+        fs::write(&tmp_body, &request_body).map_err(|e| {
+            crate::error::FdmlError::project_error(format!("Failed to write temp request: {}", e))
+        })?;
+
+        // Call Anthropic API via curl
+        let output = Command::new("curl")
+            .arg("-s")
+            .arg("-X").arg("POST")
+            .arg("https://api.anthropic.com/v1/messages")
+            .arg("-H").arg(format!("x-api-key: {}", api_key))
+            .arg("-H").arg("anthropic-version: 2023-06-01")
+            .arg("-H").arg("content-type: application/json")
+            .arg("-d").arg(format!("@{}", tmp_body.display()))
+            .output()
+            .map_err(|e| {
+                crate::error::FdmlError::project_error(format!("Failed to run curl: {}", e))
+            })?;
+
+        // Clean up temp file
+        let _ = fs::remove_file(&tmp_body);
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(crate::error::FdmlError::project_error(
+                format!("curl failed: {}", stderr)
+            ));
+        }
+
+        let response_str = String::from_utf8_lossy(&output.stdout).to_string();
+
+        // Parse JSON response
+        let json: serde_json::Value = serde_json::from_str(&response_str).map_err(|e| {
+            crate::error::FdmlError::project_error(
+                format!("Failed to parse API response: {}. Raw: {}", e, &response_str[..200.min(response_str.len())])
+            )
+        })?;
+
+        // Check for API errors
+        if let Some(error) = json.get("error") {
+            let msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
+            return Err(crate::error::FdmlError::project_error(
+                format!("Anthropic API error: {}", msg)
+            ));
+        }
+
+        // Extract text content
+        let text = json.get("content")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|item| item.get("text"))
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| {
+                crate::error::FdmlError::project_error(
+                    format!("Unexpected API response structure: {}", &response_str[..500.min(response_str.len())])
+                )
+            })?;
+
+        let resp_lines = text.lines().count();
+        eprintln!("  ℹ Response: {} lines, {:.1} KB", resp_lines, text.len() as f64 / 1024.0);
+
+        // Usage info
+        if let Some(usage) = json.get("usage") {
+            let input_tokens = usage.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+            let output_tokens = usage.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+            eprintln!("  ℹ Tokens: {} input, {} output", input_tokens, output_tokens);
+        }
+
+        // Strip markdown yaml fences if present
+        let cleaned = text.trim();
+        let cleaned = if cleaned.starts_with("```yaml") || cleaned.starts_with("```yml") {
+            let start = cleaned.find('\n').unwrap_or(0) + 1;
+            let end = cleaned.rfind("```").unwrap_or(cleaned.len());
+            &cleaned[start..end]
+        } else if cleaned.starts_with("```") {
+            let start = cleaned.find('\n').unwrap_or(0) + 1;
+            let end = cleaned.rfind("```").unwrap_or(cleaned.len());
+            &cleaned[start..end]
+        } else {
+            cleaned
+        };
+
+        print_success("LLM response received");
+
+        Ok(cleaned.trim().to_string())
     }
 
     /// Apply a single migration operation directly (used for add commands)

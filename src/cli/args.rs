@@ -136,9 +136,21 @@ pub enum Commands {
         #[arg(short, long)]
         output: Option<String>,
 
-        /// Output format (yaml, json)
+        /// Output format (yaml, json, prompt)
         #[arg(short, long, default_value = "yaml")]
         format: String,
+
+        /// Send metaprompt to LLM via claude CLI and get FDML spec back
+        #[arg(long)]
+        llm: bool,
+
+        /// Use fast model (haiku) for quick drafts
+        #[arg(long)]
+        fast: bool,
+
+        /// Specific model to use with --llm (default: sonnet)
+        #[arg(long)]
+        model: Option<String>,
     },
 }
 
