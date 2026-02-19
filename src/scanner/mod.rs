@@ -2,6 +2,9 @@ pub mod types;
 pub mod python;
 pub mod java;
 pub mod csharp;
+pub mod javascript;
+pub mod typescript;
+pub mod go_lang;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -19,6 +22,11 @@ const EXCLUDE_DIRS: &[&str] = &[
     "site-packages", "lib", "libs",
     ".tox", ".pytest_cache", ".mypy_cache",
     "migrations", "static", "media", "assets",
+    "testdata",
+    // Frontend build outputs and caches
+    ".next", ".nuxt", ".output", ".cache", ".parcel-cache", ".turbo",
+    "storybook-static", "coverage", "bower_components",
+    "__tests__", ".storybook",
 ];
 
 /// Scan a project directory and produce a full inventory
@@ -53,6 +61,9 @@ pub fn scan_project(codebase_path: &str, exclude_patterns: &[String]) -> Result<
             Language::Python => python::PythonScanner::parse_file(&source, &rel_path)?,
             Language::Java => java::JavaScanner::parse_file(&source, &rel_path)?,
             Language::CSharp => csharp::CSharpScanner::parse_file(&source, &rel_path)?,
+            Language::JavaScript => javascript::JavaScriptScanner::parse_file(&source, &rel_path)?,
+            Language::TypeScript => typescript::TypeScriptScanner::parse_file(&source, &rel_path)?,
+            Language::Go => go_lang::GoScanner::parse_file(&source, &rel_path)?,
         };
 
         analysis.module_path = module_path;
@@ -75,6 +86,9 @@ pub fn scan_project(codebase_path: &str, exclude_patterns: &[String]) -> Result<
         if languages_detected.contains("python") { langs.push(Language::Python); }
         if languages_detected.contains("java") { langs.push(Language::Java); }
         if languages_detected.contains("csharp") { langs.push(Language::CSharp); }
+        if languages_detected.contains("javascript") { langs.push(Language::JavaScript); }
+        if languages_detected.contains("typescript") { langs.push(Language::TypeScript); }
+        if languages_detected.contains("go") { langs.push(Language::Go); }
         langs
     };
 
@@ -130,6 +144,35 @@ fn compute_module_path(rel_path: &str, language: &Language) -> String {
         Language::CSharp => {
             let stripped = rel_path.trim_end_matches(".cs");
             stripped.replace('/', ".").replace('\\', ".")
+        }
+        Language::Go => {
+            // Strip common Go source roots
+            let stripped = rel_path
+                .trim_start_matches("cmd/")
+                .trim_start_matches("internal/")
+                .trim_start_matches("pkg/")
+                .trim_end_matches(".go");
+            stripped.replace('/', ".").replace('\\', ".")
+        }
+        Language::JavaScript | Language::TypeScript => {
+            // Strip src/ prefix
+            let stripped = rel_path.trim_start_matches("src/");
+            // Remove extension
+            let without_ext = stripped
+                .trim_end_matches(".tsx")
+                .trim_end_matches(".ts")
+                .trim_end_matches(".jsx")
+                .trim_end_matches(".mjs")
+                .trim_end_matches(".js");
+            let module = without_ext.replace('/', ".").replace('\\', ".");
+            // index.js/index.ts → parent directory name
+            if module.ends_with(".index") {
+                module.trim_end_matches(".index").to_string()
+            } else if module == "index" {
+                String::new()
+            } else {
+                module
+            }
         }
     }
 }
@@ -215,13 +258,29 @@ fn build_tree_node(module_path: &str, module_map: &HashMap<String, (Option<Strin
     }
 }
 
+/// Check if a filename is a generated/bundled file that should be skipped
+fn is_generated_file(filename: &str) -> bool {
+    filename.ends_with(".d.ts")
+        || filename.ends_with(".d.tsx")
+        || filename.ends_with(".min.js")
+        || filename.ends_with(".min.mjs")
+        || filename.ends_with(".bundle.js")
+        // Go generated/test files
+        || filename.ends_with("_test.go")
+        || filename.ends_with(".pb.go")
+}
+
 fn collect_files(
     dir: &Path,
     files: &mut Vec<(String, Language)>,
     exclude_patterns: &[String],
 ) -> Result<()> {
     if !dir.is_dir() {
-        // Single file
+        // Single file — skip generated/bundled files
+        let filename = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if is_generated_file(filename) {
+            return Ok(());
+        }
         if let Some(ext) = dir.extension().and_then(|e| e.to_str()) {
             if let Some(lang) = Language::from_extension(ext) {
                 files.push((dir.to_string_lossy().to_string(), lang));
@@ -256,9 +315,16 @@ fn collect_files(
 
         if path.is_dir() {
             collect_files(&path, files, exclude_patterns)?;
-        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if let Some(lang) = Language::from_extension(ext) {
-                files.push((path.to_string_lossy().to_string(), lang));
+        } else {
+            // Skip generated/bundled files
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if is_generated_file(filename) {
+                continue;
+            }
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if let Some(lang) = Language::from_extension(ext) {
+                    files.push((path.to_string_lossy().to_string(), lang));
+                }
             }
         }
     }

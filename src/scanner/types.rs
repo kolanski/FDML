@@ -7,6 +7,9 @@ pub enum Language {
     Python,
     Java,
     CSharp,
+    JavaScript,
+    TypeScript,
+    Go,
 }
 
 impl Language {
@@ -15,6 +18,9 @@ impl Language {
             "py" => Some(Language::Python),
             "java" => Some(Language::Java),
             "cs" => Some(Language::CSharp),
+            "js" | "jsx" | "mjs" => Some(Language::JavaScript),
+            "ts" | "tsx" => Some(Language::TypeScript),
+            "go" => Some(Language::Go),
             _ => None,
         }
     }
@@ -24,6 +30,9 @@ impl Language {
             Language::Python => "python",
             Language::Java => "java",
             Language::CSharp => "csharp",
+            Language::JavaScript => "javascript",
+            Language::TypeScript => "typescript",
+            Language::Go => "go",
         }
     }
 }
