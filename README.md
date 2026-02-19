@@ -235,14 +235,42 @@ The FDML CLI provides a comprehensive toolset for working with FDML specificatio
 - `--output <file>` - Write to file instead of stdout
 - `--exclude <dir1,dir2>` - Additional directories to skip
 
-Supported languages: Python, Java, C#. Auto-detected by file extension.
+Supported languages: Python, Java, C#, JavaScript, TypeScript, Go. Auto-detected by file extension.
 
 Extracts: classes, functions, methods, fields, imports, inheritance, module hierarchy.
 Produces relative file paths and dotted module paths (e.g. `slowapi.extension`).
 
+Automatically skips: `node_modules`, `vendor`, build outputs (`.next`, `.nuxt`, `dist`),
+generated files (`.d.ts`, `.min.js`, `_test.go`, `.pb.go`).
+
 Example:
 ```bash
 fdml parse-code ./my-project --format yaml --output inventory.yaml
+```
+
+**Code Linking (inventory → FDML spec):**
+- `fdml link-code --code <inventory>` - Link code inventory to FDML spec
+- `--fdml <spec.fdml>` - Existing FDML spec to match against (optional — generates draft if missing)
+- `--format <yaml|json|prompt>` - Output format (default: yaml)
+- `--output <file>` - Write to file instead of stdout
+- `--llm` - Send to LLM and get FDML spec back
+- `--provider <cli|api>` - LLM provider: `cli` (claude CLI) or `api` (ANTHROPIC_API_KEY)
+- `--model <model>` - Specific model to use with `--llm`
+- `--fast` - Use fast model (haiku) for quick drafts
+
+Matches classes → entities, methods → actions, modules → features.
+Produces traceability links, coverage report, and unlinked elements.
+
+Example:
+```bash
+# Step 1: scan code
+fdml parse-code ./my-project --format json --output inventory.json
+
+# Step 2: link to spec (or generate draft)
+fdml link-code --code inventory.json --format yaml --output links.yaml
+
+# Step 2 (with LLM): generate full FDML spec from code
+fdml link-code --code inventory.json --llm --output spec.fdml
 ```
 
 **Traceability:**
