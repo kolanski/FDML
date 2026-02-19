@@ -29,6 +29,15 @@ tree-sitter-c-sharp = "0.21"
 tree-sitter-javascript = "0.21"
 tree-sitter-typescript = "0.21"
 tree-sitter-go = "0.21"
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors"] }
+rust-embed = "8"
+notify = "7"
+notify-debouncer-mini = "0.5"
+open = "5"
+tokio-stream = { version = "0.1", features = ["sync"] }
+mime_guess = "2"
 
 [dev-dependencies]
 tempfile = "3.0"

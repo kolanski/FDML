@@ -121,6 +121,20 @@ pub enum Commands {
         exclude: Vec<String>,
     },
 
+    /// Launch interactive visual spec viewer in the browser
+    Serve {
+        /// Path to the .fdml file to visualize
+        file: String,
+
+        /// Port to serve on
+        #[arg(short, long, default_value = "3000")]
+        port: u16,
+
+        /// Don't auto-open the browser
+        #[arg(long)]
+        no_open: bool,
+    },
+
     /// Link code inventory to FDML spec — match classes→entities, methods→actions, modules→features
     #[command(name = "link-code")]
     LinkCode {

@@ -765,115 +765,131 @@ pub fn generate_metaprompt(report: &LinkReport, scan: &ScanResult) -> String {
     prompt.push_str("2. **Actions**: Which functions represent business actions vs internal implementation?\n");
     prompt.push_str("3. **Features**: How should modules be grouped into user-facing features?\n");
     prompt.push_str("4. **Scenarios**: Write BDD scenarios (Given/When/Then) for each feature\n");
-    prompt.push_str("5. **Constraints**: Identify business rules from the code structure\n\n");
+    prompt.push_str("5. **Constraints**: Identify business rules from the code structure\n");
+    prompt.push_str("6. **Flows**: Chain actions into end-to-end flows where action A's output entity feeds action B's input entity\n\n");
 
     prompt.push_str("Output a valid FDML YAML specification with entities, actions, features,\n");
     prompt.push_str("constraints, and traceability sections.\n\n");
 
     // ─── FDML Spec Reference ──────────────────────────────────────
     prompt.push_str("---\n\n## FDML Specification Reference\n\n");
-    prompt.push_str("Use these exact structures in your output YAML.\n\n");
+    prompt.push_str("Output a **single valid YAML document** with exactly these top-level keys.\n");
+    prompt.push_str("CRITICAL: Each list item is a FLAT object (starts with `- id:`), NOT wrapped in a type key.\n\n");
 
-    prompt.push_str("### Entity\n");
+    prompt.push_str("### Complete Document Structure\n");
     prompt.push_str("```yaml\n");
-    prompt.push_str("entity:\n");
-    prompt.push_str("  id: string            # snake_case unique identifier\n");
-    prompt.push_str("  name: string          # Human-readable name\n");
-    prompt.push_str("  description: string   # What this entity represents\n");
-    prompt.push_str("  fields:\n");
-    prompt.push_str("    - name: string      # Field name\n");
-    prompt.push_str("      type: <string|integer|float|boolean|datetime|date|array|object|enum|uuid>\n");
-    prompt.push_str("      required: bool\n");
-    prompt.push_str("      description: string\n");
-    prompt.push_str("      default: any      # Optional default value\n");
-    prompt.push_str("      constraints:      # Optional: unique, max_length, min_length, max_value, min_value, pattern, nullable\n");
-    prompt.push_str("        - string|dict\n");
-    prompt.push_str("  relationships:        # Optional: links to other entities\n");
-    prompt.push_str("    - entity: string\n");
-    prompt.push_str("      type: string      # has_one, has_many, belongs_to, extends\n");
-    prompt.push_str("```\n\n");
+    prompt.push_str("metadata:\n");
+    prompt.push_str("  version: \"1.3\"\n\n");
 
-    prompt.push_str("### Action\n");
-    prompt.push_str("```yaml\n");
-    prompt.push_str("action:\n");
-    prompt.push_str("  id: string\n");
-    prompt.push_str("  name: string\n");
-    prompt.push_str("  description: string\n");
-    prompt.push_str("  input:                # Input parameters\n");
-    prompt.push_str("    - name: string\n");
-    prompt.push_str("      type: <data_type>\n");
-    prompt.push_str("      required: bool\n");
-    prompt.push_str("  output:               # Output data\n");
-    prompt.push_str("    - name: string\n");
-    prompt.push_str("      type: <data_type>\n");
-    prompt.push_str("  logic: string         # Pseudocode or algorithm description\n");
-    prompt.push_str("  exceptions:\n");
-    prompt.push_str("    - code: string\n");
-    prompt.push_str("      message: string\n");
-    prompt.push_str("```\n\n");
-
-    prompt.push_str("### Feature (BDD)\n");
-    prompt.push_str("```yaml\n");
-    prompt.push_str("feature:\n");
-    prompt.push_str("  id: string\n");
-    prompt.push_str("  title: string         # Human-readable feature name\n");
-    prompt.push_str("  description: string\n");
-    prompt.push_str("  scenarios:\n");
-    prompt.push_str("    - id: string\n");
-    prompt.push_str("      title: string\n");
-    prompt.push_str("      given:            # Initial state\n");
-    prompt.push_str("        - string\n");
-    prompt.push_str("      when:             # Action taken\n");
-    prompt.push_str("        - string\n");
-    prompt.push_str("      then:             # Expected result\n");
-    prompt.push_str("        - string\n");
-    prompt.push_str("```\n\n");
-
-    prompt.push_str("### Constraint\n");
-    prompt.push_str("```yaml\n");
-    prompt.push_str("constraint:\n");
-    prompt.push_str("  id: string\n");
-    prompt.push_str("  name: string\n");
-    prompt.push_str("  description: string\n");
-    prompt.push_str("  applies_to:           # entity_id, action_id, or feature_id\n");
-    prompt.push_str("    - string\n");
-    prompt.push_str("  condition: string     # Rule expression\n");
-    prompt.push_str("  message: string       # Error message on violation\n");
-    prompt.push_str("```\n\n");
-
-    prompt.push_str("### Traceability\n");
-    prompt.push_str("```yaml\n");
-    prompt.push_str("traceability:\n");
-    prompt.push_str("  - from: fdml_element_id       # entity/action/feature ID\n");
-    prompt.push_str("    to: \"file_path:ElementPath\"  # code reference\n");
-    prompt.push_str("    relation: string             # implements | represented_by | verifies | depends_on | calls | configures\n");
-    prompt.push_str("    description: string\n");
-    prompt.push_str("```\n\n");
-
-    prompt.push_str("### System\n");
-    prompt.push_str("```yaml\n");
     prompt.push_str("system:\n");
     prompt.push_str("  id: string\n");
     prompt.push_str("  name: string\n");
     prompt.push_str("  description: string\n");
     prompt.push_str("  components:\n");
-    prompt.push_str("    - string            # Module/component identifiers\n");
+    prompt.push_str("    - string\n");
     prompt.push_str("  relationships:\n");
     prompt.push_str("    - from: string\n");
     prompt.push_str("      to: string\n");
-    prompt.push_str("      type: string      # dependency | data_flow | control_flow | event\n");
+    prompt.push_str("      type: string      # dependency | data_flow | control_flow | event\n\n");
+
+    prompt.push_str("entities:               # Array of entity objects\n");
+    prompt.push_str("  - id: string          # snake_case unique identifier (FLAT — no 'entity:' wrapper!)\n");
+    prompt.push_str("    name: string\n");
+    prompt.push_str("    description: string\n");
+    prompt.push_str("    fields:\n");
+    prompt.push_str("      - name: string\n");
+    prompt.push_str("        type: <string|integer|float|boolean|datetime|date|array|object|enum|uuid>\n");
+    prompt.push_str("        required: bool\n");
+    prompt.push_str("        description: string\n");
+    prompt.push_str("        default: any      # Optional\n");
+    prompt.push_str("        constraints:      # Optional list of constraint objects\n");
+    prompt.push_str("          - type: string   # unique, max_length, min_length, max_value, min_value, pattern, nullable, enum, email\n");
+    prompt.push_str("            value: any     # Optional: the constraint value (e.g. 255 for max_length)\n");
+    prompt.push_str("            message: string # Optional: error message\n");
+    prompt.push_str("    relationships:        # Optional: links to other entities\n");
+    prompt.push_str("      - entity: string\n");
+    prompt.push_str("        type: string      # has_one, has_many, belongs_to, extends\n\n");
+
+    prompt.push_str("actions:                # Array of action objects\n");
+    prompt.push_str("  - id: string          # FLAT — no 'action:' wrapper!\n");
+    prompt.push_str("    name: string\n");
+    prompt.push_str("    description: string\n");
+    prompt.push_str("    input:              # NOT an array! A single object:\n");
+    prompt.push_str("      entity: string    # Optional: reference to entity id\n");
+    prompt.push_str("      fields:           # List of field names\n");
+    prompt.push_str("        - string\n");
+    prompt.push_str("    output:             # Same structure as input\n");
+    prompt.push_str("      entity: string\n");
+    prompt.push_str("      fields:\n");
+    prompt.push_str("        - string\n");
+    prompt.push_str("    preconditions:      # Optional: conditions that must be true before action\n");
+    prompt.push_str("      - string\n");
+    prompt.push_str("    postconditions:     # Optional: conditions guaranteed after action\n");
+    prompt.push_str("      - string\n");
+    prompt.push_str("    side_effects:       # Optional: side effects of the action\n");
+    prompt.push_str("      - string\n\n");
+
+    prompt.push_str("features:               # Array of feature objects\n");
+    prompt.push_str("  - id: string          # FLAT — no 'feature:' wrapper!\n");
+    prompt.push_str("    title: string\n");
+    prompt.push_str("    description: string\n");
+    prompt.push_str("    scenarios:\n");
+    prompt.push_str("      - id: string\n");
+    prompt.push_str("        title: string\n");
+    prompt.push_str("        given:\n");
+    prompt.push_str("          - string\n");
+    prompt.push_str("        when:\n");
+    prompt.push_str("          - string\n");
+    prompt.push_str("        then:\n");
+    prompt.push_str("          - string\n\n");
+
+    prompt.push_str("flows:                  # Array of flow objects — chain actions by entity data-flow\n");
+    prompt.push_str("  - id: string          # FLAT — no 'flow:' wrapper!\n");
+    prompt.push_str("    name: string\n");
+    prompt.push_str("    description: string\n");
+    prompt.push_str("    steps:\n");
+    prompt.push_str("      - id: string\n");
+    prompt.push_str("        action: string  # Reference to action id\n");
+    prompt.push_str("        description: string\n");
+    prompt.push_str("        conditions:     # Optional: preceding step conditions\n");
+    prompt.push_str("          - string\n\n");
+
+    prompt.push_str("constraints:            # Array of constraint objects\n");
+    prompt.push_str("  - id: string          # FLAT — no 'constraint:' wrapper!\n");
+    prompt.push_str("    name: string\n");
+    prompt.push_str("    description: string\n");
+    prompt.push_str("    type: string        # uniqueness, validation, state_machine, business_rule\n");
+    prompt.push_str("    rule: string        # Rule expression (e.g. \"user.email must be unique\")\n");
+    prompt.push_str("    entities:           # Optional: entity IDs this applies to\n");
+    prompt.push_str("      - string\n");
+    prompt.push_str("    actions:            # Optional: action IDs this applies to\n");
+    prompt.push_str("      - string\n\n");
+
+    prompt.push_str("traceability:\n");
+    prompt.push_str("  - from: fdml_element_id\n");
+    prompt.push_str("    to: \"file_path:ElementPath\"\n");
+    prompt.push_str("    relation: string     # implements | represented_by | verifies | depends_on | calls | configures\n");
+    prompt.push_str("    description: string\n");
+    prompt.push_str("```\n\n");
+
+    prompt.push_str("### WRONG vs RIGHT format\n");
+    prompt.push_str("```yaml\n");
+    prompt.push_str("# WRONG — do NOT use type wrappers:\n");
+    prompt.push_str("entities:\n");
+    prompt.push_str("  - entity:\n");
+    prompt.push_str("      id: user\n");
+    prompt.push_str("      name: User\n\n");
+    prompt.push_str("# RIGHT — flat list items:\n");
+    prompt.push_str("entities:\n");
+    prompt.push_str("  - id: user\n");
+    prompt.push_str("    name: User\n");
     prompt.push_str("```\n\n");
 
     prompt.push_str("### FDML Data Types\n");
     prompt.push_str("string, integer, float, boolean, datetime, date, array, object, enum, uuid\n\n");
 
     prompt.push_str("### Relation Types (for traceability)\n");
-    prompt.push_str("- **implements**: feature/action implemented by code\n");
-    prompt.push_str("- **represented_by**: entity represented by class\n");
-    prompt.push_str("- **verifies**: test validates feature/scenario\n");
-    prompt.push_str("- **depends_on**: dependency between elements\n");
-    prompt.push_str("- **calls**: code invokes another element\n");
-    prompt.push_str("- **configures**: config affects behavior\n\n");
+    prompt.push_str("implements, represented_by, verifies, depends_on, calls, configures\n\n");
 
     // ─── System overview ──────────────────────────────────────────
     prompt.push_str("---\n\n## System Overview\n\n");

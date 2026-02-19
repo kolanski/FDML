@@ -1,0 +1,2119 @@
+metadata:
+  version: "1.3"
+
+system:
+  id: studio_setup
+  name: studio-setup
+  description: A notebook-centric data workflow studio that lets users author Marimo notebooks, configure data sources, define routing workflows, and execute notebooks via warm Python workers—all orchestrated through a React frontend, a local Bun/Node server, and a standalone runner process.
+  components:
+    - App
+    - api
+    - components
+    - data
+    - hooks
+    - marimo_ctx
+    - notebooks
+    - pages
+    - runner
+    - server
+    - storage
+    - types
+  relationships:
+    - from: App
+      to: pages
+      type: dependency
+    - from: pages
+      to: api
+      type: dependency
+    - from: pages
+      to: storage
+      type: dependency
+    - from: storage
+      to: types
+      type: dependency
+    - from: components
+      to: storage
+      type: dependency
+    - from: components
+      to: api
+      type: dependency
+    - from: server
+      to: server.api.notebooks
+      type: control_flow
+    - from: server
+      to: server.api.workflows
+      type: control_flow
+    - from: server
+      to: server.store.file-store
+      type: dependency
+    - from: server
+      to: server.marimo.manager
+      type: dependency
+    - from: server
+      to: server.lock.manager
+      type: dependency
+    - from: server
+      to: server.worker.manager
+      type: dependency
+    - from: server.api.notebooks
+      to: server.lock.manager
+      type: dependency
+    - from: server.api.notebooks
+      to: server.marimo.manager
+      type: dependency
+    - from: server.api.notebooks
+      to: server.store.interface
+      type: dependency
+    - from: server.api.workflows
+      to: server.worker.manager
+      type: dependency
+    - from: server.api.workflows
+      to: server.sources.config-generator
+      type: dependency
+    - from: runner
+      to: runner.worker-manager
+      type: dependency
+    - from: runner
+      to: runner.config-generator
+      type: dependency
+    - from: marimo_ctx
+      to: marimo_ctx.sources
+      type: dependency
+    - from: marimo_ctx
+      to: marimo_ctx.env
+      type: dependency
+    - from: marimo_ctx
+      to: marimo_ctx.request
+      type: dependency
+    - from: marimo_ctx.sources
+      to: marimo_ctx.sources.sqlite
+      type: dependency
+    - from: marimo_ctx.sources
+      to: marimo_ctx.sources.postgres
+      type: dependency
+    - from: runner.worker-manager
+      to: marimo_ctx
+      type: event
+
+entities:
+  - id: project
+    name: Project
+    description: Top-level container grouping workspaces, data sources, notebooks, workflows, and runners. Persisted in localStorage.
+    fields:
+      - name: id
+        type: uuid
+        required: true
+        description: Unique project identifier
+      - name: name
+        type: string
+        required: true
+        description: Human-readable project name
+        constraints:
+          - type: min_length
+            value: 1
+            message: Project name must not be empty
+      - name: description
+        type: string
+        required: false
+        description: Optional project description
+      - name: createdAt
+        type: datetime
+        required: true
+        description: Creation timestamp
+      - name: updatedAt
+        type: datetime
+        required: true
+        description: Last update timestamp
+
+  - id: workspace
+    name: Workspace
+    description: A named namespace inside a project, identified by a slug, that scopes notebooks and data sources.
+    fields:
+      - name: id
+        type: uuid
+        required: true
+        description: Unique workspace identifier
+      - name: projectId
+        type: uuid
+        required: true
+        description: Parent project reference
+      - name: name
+        type: string
+        required: true
+        description: Display name
+        constraints:
+          - type: min_length
+            value: 1
+      - name: slug
+        type: string
+        required: true
+        description: URL-safe slug used as the on-disk directory name and routing key
+        constraints:
+          - type: pattern
+            value: "^[a-z0-9-]+$"
+            message: Slug must be lowercase alphanumeric with hyphens
+          - type: unique
+            message: Workspace slug must be unique within a project
+      - name: createdAt
+        type: datetime
+        required: true
+        description: Creation timestamp
+      - name: updatedAt
+        type: datetime
+        required: true
+        description: Last update timestamp
+
+  - id: data_source
+    name: DataSource
+    description: A configured database or API connection available to notebooks in a workspace.
+    fields:
+      - name: id
+        type: uuid
+        required: true
+        description: Unique data source identifier
+      - name: workspaceId
+        type: uuid
+        required: true
+        description: Owning workspace
+      - name: name
+        type: string
+        required: true
+        description: Slug-style identifier used in notebook code
+        constraints:
+          - type: unique
+            message: Data source name must be unique within a workspace
+          - type: pattern
+            value: "^[a-z0-9_]+$"
+            message: Name must be lowercase alphanumeric with underscores
+      - name: displayName
+        type: string
+        required: true
+        description: Human-readable label shown in the UI
+      - name: type
+        type: enum
+        required: true
+        description: Backend database or API type
+        constraints:
+          - type: enum
+            value: ["sqlite", "postgres", "custom_api", "processed_endpoint"]
+      - name: status
+        type: enum
+        required: true
+        description: Current connectivity status
+        constraints:
+          - type: enum
+            value: ["active", "inactive", "error"]
+        default: active
+      - name: permissions
+        type: object
+        required: true
+        description: CRUD permission flags controlling what notebook code may do
+      - name: connection
+        type: object
+        required: false
+        description: Type-specific connection details (path for SQLite, host/port/db/user/password for Postgres)
+      - name: runnerConnection
+        type: object
+        required: false
+        description: Optional connection overrides used by the runner instead of the studio connection
+      - name: customApiConfig
+        type: object
+        required: false
+        description: Base URL, auth, and route definitions for custom API data sources
+      - name: processedEndpointConfig
+        type: object
+        required: false
+        description: Source, query, and processing code for processed endpoint data sources
+      - name: createdAt
+        type: datetime
+        required: true
+        description: Creation timestamp
+      - name: updatedAt
+        type: datetime
+        required: true
+        description: Last update timestamp
+    relationships:
+      - entity: workspace
+        type: belongs_to
+
+  - id: notebook
+    name: Notebook
+    description: A Marimo Python notebook file managed by the studio—authored in the browser, stored on disk, and executable via the Python worker.
+    fields:
+      - name: id
+        type: uuid
+        required: true
+        description: Unique notebook identifier
+      - name: workspaceId
+        type: uuid
+        required: true
+        description: Owning workspace
+      - name: name
+        type: string
+        required: true
+        description: Slug identifier (used as filename)
+        constraints:
+          - type: unique
+            message: Notebook name must be unique within a workspace
+      - name: displayName
+        type: string
+        required: true
+        description: Human-readable title
+      - name: description
+        type: string
+        required: false
+        description: Optional description
+      - name: code
+        type: string
+        required: false
+        description: Full Python source code of the notebook
+      - name: connectedSources
+        type: array
+        required: false
+        description: List of data source IDs connected to this notebook
+        default: []
+      - name: status
+        type: enum
+        required: true
+        description: Lifecycle status
+        constraints:
+          - type: enum
+            value: ["draft", "active", "archived"]
+        default: draft
+      - name: deployment
+        type: object
+        required: false
+        description: API deployment settings (enabled flag and API path)
+      - name: createdAt
+        type: datetime
+        required: true
+        description: Creation timestamp
+      - name: updatedAt
+        type: datetime
+        required: true
+        description: Last update timestamp
+    relationships:
+      - entity: workspace
+        type: belongs_to
+      - entity: data_source
+        type: has_many
+
+  - id: workflow
+    name: Workflow
+    description: A named API endpoint that resolves to one or more notebooks based on query-parameter routing rules and injects environment variables into the execution context.
+    fields:
+      - name: id
+        type: uuid
+        required: true
+        description: Unique workflow identifier
+      - name: workspaceId
+        type: uuid
+        required: true
+        description: Owning workspace
+      - name: name
+        type: string
+        required: true
+        description: Slug identifier
+        constraints:
+          - type: unique
+            message: Workflow name must be unique within a workspace
+      - name: displayName
+        type: string
+        required: true
+        description: Human-readable label
+      - name: description
+        type: string
+        required: false
+        description: Optional description
+      - name: type
+        type: enum
+        required: true
+        description: Trigger mechanism
+        constraints:
+          - type: enum
+            value: ["api", "broker"]
+        default: api
+      - name: apiPath
+        type: string
+        required: false
+        description: URL path exposed by the runner (e.g. /my-workflow)
+      - name: routingConfig
+        type: object
+        required: true
+        description: Query params, routing rules, fallback strategy, and default notebook ID
+      - name: brokerConfig
+        type: object
+        required: false
+        description: Message-broker connection settings for broker-type workflows
+      - name: envVariables
+        type: array
+        required: false
+        description: Static or query-param-derived environment variables injected at execution time
+        default: []
+      - name: createdAt
+        type: datetime
+        required: true
+        description: Creation timestamp
+      - name: updatedAt
+        type: datetime
+        required: true
+        description: Last update timestamp
+    relationships:
+      - entity: workspace
+        type: belongs_to
+      - entity: notebook
+        type: has_many
+      - entity: routing_rule
+        type: has_many
+
+  - id: routing_rule
+    name: RoutingRule
+    description: A conditional rule mapping a set of query-parameter values to a target notebook within a workflow.
+    fields:
+      - name: id
+        type: uuid
+        required: true
+        description: Unique rule identifier
+      - name: conditions
+        type: array
+        required: true
+        description: List of {paramName, paramValue} pairs that must all match
+      - name: notebookId
+        type: uuid
+        required: true
+        description: Target notebook to execute when all conditions match
+    relationships:
+      - entity: workflow
+        type: belongs_to
+      - entity: notebook
+        type: belongs_to
+
+  - id: env_variable
+    name: EnvVariable
+    description: An environment variable definition attached to a workflow, sourced either from a static value or from a query parameter at runtime.
+    fields:
+      - name: key
+        type: string
+        required: true
+        description: Environment variable name
+      - name: value
+        type: string
+        required: false
+        description: Static value (used when source is 'static')
+      - name: source
+        type: enum
+        required: true
+        description: How the value is resolved
+        constraints:
+          - type: enum
+            value: ["static", "query_param"]
+        default: static
+      - name: queryParamName
+        type: string
+        required: false
+        description: Query parameter name to read from when source is 'query_param'
+
+  - id: runner
+    name: Runner
+    description: A registered remote runner instance that can execute workflows. The studio syncs workflows to runners and tracks their health.
+    fields:
+      - name: id
+        type: uuid
+        required: true
+        description: Unique runner identifier
+      - name: name
+        type: string
+        required: true
+        description: Human-readable runner name
+      - name: url
+        type: string
+        required: true
+        description: Base URL of the runner HTTP server
+        constraints:
+          - type: pattern
+            value: "^https?://"
+            message: Runner URL must be a valid HTTP/HTTPS URL
+      - name: apiKey
+        type: string
+        required: true
+        description: Bearer token used to authenticate requests to the runner
+      - name: status
+        type: enum
+        required: true
+        description: Last-known connectivity status
+        constraints:
+          - type: enum
+            value: ["online", "offline", "unknown"]
+        default: unknown
+      - name: lastSync
+        type: datetime
+        required: false
+        description: Timestamp of last successful config sync
+      - name: lastSeen
+        type: datetime
+        required: false
+        description: Timestamp of last heartbeat response
+      - name: workflowCount
+        type: integer
+        required: false
+        description: Number of workflows synced to this runner
+        default: 0
+      - name: executionCount
+        type: integer
+        required: false
+        description: Total executions processed by this runner
+        default: 0
+      - name: createdAt
+        type: datetime
+        required: true
+        description: Creation timestamp
+      - name: updatedAt
+        type: datetime
+        required: true
+        description: Last update timestamp
+
+  - id: lock
+    name: Lock
+    description: An optimistic editing lock on a notebook that prevents concurrent edits by different browser sessions.
+    fields:
+      - name: notebookId
+        type: uuid
+        required: true
+        description: Locked notebook
+      - name: lockedBy
+        type: string
+        required: true
+        description: Opaque user/session identifier that holds the lock
+      - name: lockedAt
+        type: datetime
+        required: true
+        description: When the lock was acquired
+      - name: expiresAt
+        type: datetime
+        required: true
+        description: When the lock expires if not refreshed via heartbeat
+    relationships:
+      - entity: notebook
+        type: belongs_to
+
+  - id: notebook_metadata
+    name: NotebookMetadata
+    description: Lightweight server-side record for a notebook file (id, name, last-modified) returned by list and create operations without the full code payload.
+    fields:
+      - name: id
+        type: string
+        required: true
+        description: Notebook identifier (filename without extension)
+      - name: name
+        type: string
+        required: true
+        description: Notebook display name
+      - name: lastModified
+        type: datetime
+        required: true
+        description: Filesystem last-modified timestamp
+
+  - id: marimo_instance
+    name: MarimoInstance
+    description: A running Marimo edit-mode process managed by the server, bound to a notebook file and a dynamically allocated port.
+    fields:
+      - name: notebookId
+        type: string
+        required: true
+        description: Notebook being edited
+      - name: port
+        type: integer
+        required: true
+        description: Local port the Marimo process is listening on
+      - name: filePath
+        type: string
+        required: true
+        description: Absolute path to the notebook .py file
+      - name: startedAt
+        type: datetime
+        required: true
+        description: Process start time
+    relationships:
+      - entity: notebook
+        type: belongs_to
+
+  - id: workflow_test_request
+    name: WorkflowTestRequest
+    description: A test-execution payload sent from the UI to the server to dry-run a workflow configuration before saving.
+    fields:
+      - name: workflow
+        type: object
+        required: true
+        description: Workflow definition to test (may be unsaved)
+      - name: queryParams
+        type: object
+        required: false
+        description: Simulated query parameters
+        default: {}
+      - name: dataSources
+        type: array
+        required: false
+        description: Data source definitions available during execution
+        default: []
+      - name: notebooks
+        type: array
+        required: false
+        description: Notebook id/name pairs used for routing resolution
+        default: []
+      - name: workspaceSlug
+        type: string
+        required: true
+        description: Target workspace slug
+
+  - id: workflow_test_response
+    name: WorkflowTestResponse
+    description: The result returned after a workflow test execution.
+    fields:
+      - name: success
+        type: boolean
+        required: true
+        description: Whether the notebook executed without error
+      - name: notebookId
+        type: string
+        required: false
+        description: The notebook that was resolved and executed
+      - name: notebookName
+        type: string
+        required: false
+        description: Human-readable name of the executed notebook
+      - name: output
+        type: string
+        required: false
+        description: Captured stdout/result from notebook execution
+      - name: error
+        type: string
+        required: false
+        description: Error message if execution failed
+      - name: duration
+        type: integer
+        required: true
+        description: Wall-clock execution time in milliseconds
+      - name: envVariables
+        type: object
+        required: false
+        description: Resolved environment variables passed to the notebook
+      - name: queryParams
+        type: object
+        required: false
+        description: Query parameters used during execution
+
+  - id: last_execution_data
+    name: LastExecutionData
+    description: Client-side record of the most recent workflow execution result displayed in the UI.
+    fields:
+      - name: status
+        type: enum
+        required: true
+        description: Execution outcome
+        constraints:
+          - type: enum
+            value: ["success", "error"]
+      - name: duration
+        type: integer
+        required: true
+        description: Execution time in milliseconds
+      - name: triggered
+        type: enum
+        required: true
+        description: What triggered the execution
+        constraints:
+          - type: enum
+            value: ["api_call", "manual_test", "workflow_test"]
+      - name: timestamp
+        type: datetime
+        required: true
+        description: When the execution occurred
+      - name: result
+        type: string
+        required: false
+        description: Output produced by the notebook
+      - name: error
+        type: string
+        required: false
+        description: Error details if execution failed
+      - name: notebookName
+        type: string
+        required: false
+        description: Name of the notebook that ran
+      - name: queryParams
+        type: object
+        required: false
+        description: Query parameters used
+      - name: envVariables
+        type: object
+        required: false
+        description: Environment variables injected
+
+  - id: project_export
+    name: ProjectExport
+    description: A portable JSON snapshot of a complete project including all workspaces, data sources, notebooks, workflows, and runners, used for import/export.
+    fields:
+      - name: version
+        type: string
+        required: true
+        description: Export format version
+      - name: exportedAt
+        type: datetime
+        required: true
+        description: Timestamp when export was created
+      - name: project
+        type: object
+        required: true
+        description: Project record
+      - name: workspace
+        type: object
+        required: true
+        description: Workspace record
+      - name: dataSources
+        type: array
+        required: true
+        description: All data source records
+      - name: notebooks
+        type: array
+        required: true
+        description: All notebook records
+      - name: workflows
+        type: array
+        required: true
+        description: All workflow records
+      - name: runners
+        type: array
+        required: true
+        description: All runner records
+
+  - id: base_source
+    name: BaseSource
+    description: Abstract base class for all Python-side data source adapters, defining the common CRUD and query interface used by notebook code via the ctx.sources proxy.
+    fields:
+      - name: name
+        type: string
+        required: true
+        description: Source name matching the key in the ctx config
+      - name: permissions
+        type: object
+        required: true
+        description: Resolved permission flags (create, read, readFilterRequired, update, delete, directQuery)
+    relationships:
+      - entity: data_source
+        type: represented_by
+
+  - id: ctx_config
+    name: CtxConfig
+    description: The encoded execution context configuration passed to every notebook run, containing workspace slug, source configs, env vars, and request metadata.
+    fields:
+      - name: workspace
+        type: string
+        required: true
+        description: Workspace slug
+      - name: sources
+        type: object
+        required: true
+        description: Map of source name to typed source config (sqlite/postgres)
+      - name: env
+        type: object
+        required: false
+        description: Key-value environment variables
+        default: {}
+      - name: request
+        type: object
+        required: false
+        description: Request metadata (workflow_id, triggered_by, timestamp, query_params)
+
+  - id: import_progress
+    name: ImportProgress
+    description: Tracks the multi-stage progress of a project import operation including per-notebook sync state.
+    fields:
+      - name: stage
+        type: enum
+        required: true
+        description: Current import stage
+        constraints:
+          - type: enum
+            value: ["idle", "loading", "syncing_notebooks", "complete", "error"]
+      - name: currentNotebook
+        type: string
+        required: false
+        description: Name of the notebook currently being synced
+      - name: totalNotebooks
+        type: integer
+        required: false
+        description: Total number of notebooks to sync
+      - name: completedNotebooks
+        type: integer
+        required: false
+        description: Number of notebooks successfully synced
+      - name: error
+        type: string
+        required: false
+        description: Error message if import failed
+
+actions:
+  - id: create_project
+    name: Create Project
+    description: Initialize a new project with a default workspace, persisting both to localStorage and starting the setup wizard completion flow.
+    input:
+      fields:
+        - projectName
+        - workspaceName
+    output:
+      entity: project
+      fields:
+        - id
+        - name
+        - createdAt
+    postconditions:
+      - A Project record exists in localStorage
+      - A Workspace record with a derived slug exists in localStorage
+      - StorageState.initialized is true
+
+  - id: export_project
+    name: Export Project
+    description: Serialize the entire project state (project, workspace, data sources, notebooks, workflows, runners) to a JSON string for download or backup.
+    output:
+      entity: project_export
+      fields:
+        - version
+        - exportedAt
+        - project
+        - workspace
+        - dataSources
+        - notebooks
+        - workflows
+        - runners
+    preconditions:
+      - Project is initialized (StorageState.initialized is true)
+    postconditions:
+      - A valid JSON string representing ProjectExport is returned
+
+  - id: import_project
+    name: Import Project
+    description: Restore a full project state from a previously exported JSON snapshot, overwriting current localStorage data and syncing notebook code to the server.
+    input:
+      fields:
+        - json
+    output:
+      fields:
+        - success
+    preconditions:
+      - The JSON string is a valid ProjectExport document
+    postconditions:
+      - All entities from the export are written to localStorage
+      - Notebook code for each notebook is synced to the server file store
+      - ImportProgress reflects completion or error
+
+  - id: add_data_source
+    name: Add Data Source
+    description: Create and persist a new data source configuration within the active workspace.
+    input:
+      entity: data_source
+      fields:
+        - workspaceId
+        - name
+        - displayName
+        - type
+        - connection
+        - permissions
+    output:
+      entity: data_source
+      fields:
+        - id
+        - name
+        - createdAt
+    preconditions:
+      - workspaceId refers to an existing workspace
+      - name is unique within the workspace
+    postconditions:
+      - DataSource is added to localStorage
+    side_effects:
+      - UI data sources list updates reactively
+
+  - id: update_data_source
+    name: Update Data Source
+    description: Modify connection details, permissions, or display name of an existing data source.
+    input:
+      entity: data_source
+      fields:
+        - id
+        - displayName
+        - connection
+        - permissions
+        - customApiConfig
+        - processedEndpointConfig
+    preconditions:
+      - DataSource with given id exists
+    postconditions:
+      - DataSource record in localStorage reflects the updated fields
+      - updatedAt is refreshed
+
+  - id: delete_data_source
+    name: Delete Data Source
+    description: Remove a data source and its configuration from the workspace.
+    input:
+      entity: data_source
+      fields:
+        - id
+    preconditions:
+      - DataSource with given id exists
+    postconditions:
+      - DataSource is removed from localStorage
+
+  - id: create_notebook
+    name: Create Notebook
+    description: Create a new Marimo notebook, generate its initial Python boilerplate, persist the metadata to localStorage, and write the code file to the server.
+    input:
+      entity: notebook
+      fields:
+        - workspaceId
+        - name
+        - displayName
+        - description
+        - connectedSources
+    output:
+      entity: notebook
+      fields:
+        - id
+        - name
+        - code
+        - createdAt
+    preconditions:
+      - workspaceId refers to an existing workspace
+      - name is unique within the workspace
+    postconditions:
+      - Notebook metadata persisted to localStorage
+      - Notebook .py file written to the server file store via POST /api/notebooks
+    side_effects:
+      - Notebook appears in the sidebar list
+
+  - id: delete_notebook
+    name: Delete Notebook
+    description: Remove a notebook from localStorage and delete its file from the server.
+    input:
+      entity: notebook
+      fields:
+        - id
+    preconditions:
+      - Notebook with given id exists
+      - Notebook is not currently locked by another user
+    postconditions:
+      - Notebook removed from localStorage
+      - Notebook .py file deleted on server
+    side_effects:
+      - Active editor closes if the deleted notebook was open
+
+  - id: edit_notebook
+    name: Edit Notebook (Acquire Lock)
+    description: Acquire an exclusive edit lock on a notebook, start a Marimo process for it, and return the port the editor iframe should connect to.
+    input:
+      entity: notebook
+      fields:
+        - workspaceId
+        - notebookId
+        - dataSources
+    output:
+      fields:
+        - locked
+        - port
+    preconditions:
+      - Notebook with given id exists on server
+      - No other session holds a non-expired lock on the notebook
+    postconditions:
+      - Lock record created with expiresAt = now + TTL
+      - Marimo process started and bound to an allocated port
+    side_effects:
+      - Heartbeat polling starts in the client
+
+  - id: release_notebook
+    name: Release Notebook (Release Lock)
+    description: Release the editing lock and optionally stop the Marimo process when the user closes the editor.
+    input:
+      entity: notebook
+      fields:
+        - workspaceId
+        - notebookId
+    preconditions:
+      - Caller holds the lock on the notebook
+    postconditions:
+      - Lock record removed
+      - Marimo process may be stopped
+    side_effects:
+      - Heartbeat polling stops in the client
+
+  - id: save_notebook_code
+    name: Save Notebook Code
+    description: Persist the current notebook source code to the server file store from the UI.
+    input:
+      entity: notebook
+      fields:
+        - workspaceId
+        - notebookId
+        - code
+    preconditions:
+      - Caller holds the active lock on the notebook
+    postconditions:
+      - Notebook .py file on disk reflects the submitted code
+
+  - id: create_workflow
+    name: Create Workflow
+    description: Define a new workflow with routing rules and environment variables and persist it to localStorage.
+    input:
+      entity: workflow
+      fields:
+        - workspaceId
+        - name
+        - displayName
+        - type
+        - apiPath
+        - routingConfig
+        - envVariables
+    output:
+      entity: workflow
+      fields:
+        - id
+        - name
+        - createdAt
+    preconditions:
+      - workspaceId refers to an existing workspace
+      - name is unique within the workspace
+      - All notebookIds referenced in routingConfig exist
+    postconditions:
+      - Workflow persisted to localStorage
+
+  - id: update_workflow
+    name: Update Workflow
+    description: Modify routing rules, environment variables, or API path of an existing workflow.
+    input:
+      entity: workflow
+      fields:
+        - id
+        - displayName
+        - routingConfig
+        - envVariables
+        - apiPath
+    preconditions:
+      - Workflow with given id exists
+      - All notebookIds referenced in updated routingConfig exist
+    postconditions:
+      - Workflow record updated in localStorage
+      - updatedAt refreshed
+
+  - id: test_workflow
+    name: Test Workflow
+    description: Execute a workflow in test mode with simulated query parameters, resolving routing rules and running the target notebook via the warm Python worker, returning full output.
+    input:
+      entity: workflow_test_request
+      fields:
+        - workflow
+        - queryParams
+        - dataSources
+        - notebooks
+        - workspaceSlug
+    output:
+      entity: workflow_test_response
+      fields:
+        - success
+        - notebookId
+        - notebookName
+        - output
+        - error
+        - duration
+        - envVariables
+        - queryParams
+    preconditions:
+      - Workflow routing config is valid
+      - At least one notebook is referenced in the routing config
+      - Python worker process is running
+    postconditions:
+      - LastExecutionData is populated in the UI
+    side_effects:
+      - WorkflowTestPanel displays execution results
+
+  - id: execute_workflow
+    name: Execute Workflow (Runner)
+    description: Handle an inbound API call on the runner, resolve the target notebook via routing rules, build the ctx config, and execute the notebook via the warm Python worker.
+    input:
+      entity: workflow
+      fields:
+        - id
+        - routingConfig
+        - envVariables
+    output:
+      entity: workflow_test_response
+      fields:
+        - success
+        - output
+        - error
+        - duration
+    preconditions:
+      - Valid API key in Authorization header
+      - Workflow with given apiPath is registered on the runner
+      - Python worker is running
+    postconditions:
+      - Notebook execution completes and output is returned in HTTP response
+    side_effects:
+      - Runner execution counter increments
+
+  - id: add_runner
+    name: Add Runner
+    description: Register a new remote runner with its URL and API key.
+    input:
+      entity: runner
+      fields:
+        - name
+        - url
+        - apiKey
+    output:
+      entity: runner
+      fields:
+        - id
+        - name
+        - status
+        - createdAt
+    preconditions:
+      - url is a valid HTTP/HTTPS URL
+    postconditions:
+      - Runner persisted to localStorage with status 'unknown'
+
+  - id: sync_runner
+    name: Sync Runner
+    description: Push the current workflow and notebook configurations to a registered runner so it can serve API requests.
+    input:
+      entity: runner
+      fields:
+        - id
+    preconditions:
+      - Runner with given id exists and is reachable
+    postconditions:
+      - Runner's workflow registry matches the current workspace workflows
+      - runner.lastSync updated
+      - runner.workflowCount updated
+
+  - id: acquire_notebook_lock
+    name: Acquire Notebook Lock
+    description: Server-side action that atomically creates a lock record for a notebook session.
+    input:
+      entity: lock
+      fields:
+        - notebookId
+        - lockedBy
+    output:
+      entity: lock
+      fields:
+        - notebookId
+        - lockedBy
+        - lockedAt
+        - expiresAt
+    preconditions:
+      - No active non-expired lock exists for notebookId
+    postconditions:
+      - Lock record exists with expiresAt set
+
+  - id: heartbeat_lock
+    name: Heartbeat Lock
+    description: Extend the expiry of an existing notebook lock to prevent it from expiring during an active editing session.
+    input:
+      entity: lock
+      fields:
+        - notebookId
+        - lockedBy
+    preconditions:
+      - Caller currently holds the lock on notebookId
+    postconditions:
+      - lock.expiresAt extended by lock TTL from now
+
+  - id: release_lock
+    name: Release Lock
+    description: Remove the edit lock on a notebook, allowing another session to acquire it.
+    input:
+      entity: lock
+      fields:
+        - notebookId
+        - lockedBy
+    preconditions:
+      - Caller holds the lock
+    postconditions:
+      - Lock record removed
+
+  - id: generate_encoded_config
+    name: Generate Encoded Context Config
+    description: Build and Base64-encode the CtxConfig object from workspace slug, data sources, environment variables, and request metadata so it can be passed as a single environment variable to the Python worker.
+    input:
+      entity: ctx_config
+      fields:
+        - workspace
+        - sources
+        - env
+        - request
+    output:
+      fields:
+        - encodedConfig
+    postconditions:
+      - Returns a Base64-JSON string decodable into a valid CtxConfig
+
+  - id: execute_notebook_worker
+    name: Execute Notebook via Worker
+    description: Submit notebook code to the warm Python worker HTTP server for code-cached execution and return structured output.
+    input:
+      entity: notebook
+      fields:
+        - id
+        - code
+    output:
+      entity: workflow_test_response
+      fields:
+        - success
+        - output
+        - error
+        - duration
+    preconditions:
+      - Worker process is running and healthy
+    postconditions:
+      - Notebook code is compiled and cached for subsequent calls with the same code hash
+    side_effects:
+      - Worker code cache may be updated
+
+  - id: read_from_source
+    name: Read Records from Data Source
+    description: Read records from a database table through the ctx.sources proxy, enforcing permission checks and optional filter requirements.
+    input:
+      entity: base_source
+      fields:
+        - name
+    output:
+      fields:
+        - records
+    preconditions:
+      - Source is configured in CtxConfig
+      - permissions.read is true
+      - If permissions.readFilterRequired is true, a non-empty filter must be provided
+    postconditions:
+      - Returns list of matching records as dicts
+
+  - id: write_to_source
+    name: Write Records to Data Source
+    description: Insert, update, or delete records through the ctx.sources proxy, enforcing permission checks before each operation.
+    input:
+      entity: base_source
+      fields:
+        - name
+    preconditions:
+      - Source is configured in CtxConfig
+      - Corresponding permission flag (create/update/delete) is true
+
+features:
+  - id: project_setup
+    title: Project Setup & Onboarding
+    description: First-run wizard that guides users through creating or importing a project and default workspace before accessing the studio.
+    scenarios:
+      - id: sc_setup_create
+        title: User creates a new project
+        given:
+          - The application loads for the first time with no data in localStorage
+          - The SetupWizard is displayed on the WelcomeStep
+        when:
+          - The user clicks Continue on the WelcomeStep
+          - The user enters a project name and workspace name on the ProjectStep
+          - The user clicks Create
+        then:
+          - A Project and Workspace are persisted to localStorage
+          - StorageState.initialized becomes true
+          - The CompleteStep is shown
+          - The user can click Open Studio to enter the main editor
+
+      - id: sc_setup_import
+        title: User imports an existing project from JSON
+        given:
+          - The application is in the initial uninitialized state
+          - The user is on the ProjectStep of the SetupWizard
+        when:
+          - The user selects Import from File and uploads a valid ProjectExport JSON
+        then:
+          - All project entities are restored to localStorage
+          - Notebook code is synced to the server file store for each notebook
+          - ImportProgress transitions from loading → syncing_notebooks → complete
+          - The user is advanced to the CompleteStep
+
+  - id: data_source_management
+    title: Data Source Management
+    description: Configure and manage database and API data sources that notebooks can access via the ctx.sources proxy.
+    scenarios:
+      - id: sc_ds_add_sqlite
+        title: User adds a SQLite data source
+        given:
+          - A workspace exists and the DataSourcesPanel is open
+        when:
+          - The user clicks Add Data Source
+          - The user selects type SQLite, enters a file path, and configures permissions
+          - The user clicks Save
+        then:
+          - The data source is persisted to localStorage with status active
+          - The data source appears in the DataSourcesPanel list
+
+      - id: sc_ds_add_postgres
+        title: User adds a PostgreSQL data source
+        given:
+          - A workspace exists and the DataSourcesPanel is open
+        when:
+          - The user selects type Postgres and fills in host, port, database, user, and password
+          - The user clicks Save
+        then:
+          - The Postgres data source is persisted with the provided connection details
+
+      - id: sc_ds_delete
+        title: User deletes a data source
+        given:
+          - A data source exists in the workspace
+        when:
+          - The user clicks Delete on the data source in the DataSourcesPanel
+          - The user confirms the deletion
+        then:
+          - The data source is removed from localStorage
+          - It no longer appears in the panel or in notebook connection options
+
+  - id: notebook_authoring
+    title: Notebook Authoring
+    description: Create, open, edit, and save Marimo notebooks in the embedded editor with exclusive lock management.
+    scenarios:
+      - id: sc_nb_create
+        title: User creates a new notebook
+        given:
+          - A workspace exists with at least one data source
+          - The NewNotebookForm is open
+        when:
+          - The user enters a name and display name
+          - The user selects one or more data sources to connect
+          - The user clicks Save
+        then:
+          - A notebook is persisted to localStorage
+          - Generated Python boilerplate with ctx.sources imports is written to the server
+          - The notebook appears in the sidebar
+
+      - id: sc_nb_edit
+        title: User opens a notebook for editing
+        given:
+          - A notebook exists and no other session holds its lock
+        when:
+          - The user clicks on a notebook in the sidebar
+        then:
+          - An edit lock is acquired for the user's session
+          - A Marimo process starts on an available port
+          - The notebook editor iframe connects to that port
+          - Heartbeat polling begins to keep the lock alive
+
+      - id: sc_nb_lock_conflict
+        title: Another user attempts to edit a locked notebook
+        given:
+          - User A holds the lock on a notebook
+          - User B navigates to the same notebook
+        when:
+          - User B attempts to open the notebook editor
+        then:
+          - The server returns EditLocked with lockedBy and lockedAt
+          - User B sees a read-only indicator showing who holds the lock
+
+      - id: sc_nb_save
+        title: User saves notebook code
+        given:
+          - A notebook is open and the user holds the edit lock
+        when:
+          - The user makes changes in the Marimo editor and triggers save
+        then:
+          - The updated code is written to the server file store
+          - The notebook updatedAt is refreshed
+
+  - id: workflow_management
+    title: Workflow Management
+    description: Define API workflows with query-parameter routing rules that dispatch to notebooks and inject environment variables.
+    scenarios:
+      - id: sc_wf_create
+        title: User creates a workflow
+        given:
+          - A workspace with at least one notebook exists
+          - The NewWorkflowForm is open
+        when:
+          - The user enters a workflow name, API path, and selects a default notebook
+          - The user optionally adds routing rules and environment variables
+          - The user clicks Save
+        then:
+          - The workflow is persisted to localStorage
+          - The workflow appears in the sidebar
+
+      - id: sc_wf_routing
+        title: Workflow resolves the correct notebook via routing rules
+        given:
+          - A workflow exists with routing rules on query parameter "type"
+          - Rule 1 maps type=report to notebook A
+          - Rule 2 maps type=summary to notebook B
+          - The default notebook is notebook C
+        when:
+          - An API request arrives with query parameter type=report
+        then:
+          - The runner resolves notebook A as the target
+          - Notebook A is executed with the full ctx config
+
+      - id: sc_wf_fallback
+        title: Workflow falls back to default notebook when no rule matches
+        given:
+          - A workflow has routing rules that do not match the incoming query parameters
+          - A default notebook is configured
+        when:
+          - An API request arrives with unmatched query parameters
+        then:
+          - The default notebook is resolved and executed
+
+  - id: workflow_testing
+    title: Workflow Testing
+    description: Dry-run a workflow configuration from the notebook editor panel before saving or deploying.
+    scenarios:
+      - id: sc_wft_success
+        title: User successfully tests a workflow
+        given:
+          - The notebook editor is open with the WorkflowTestPanel visible
+          - A workflow is associated with the current notebook
+          - The Python worker is running
+        when:
+          - The user fills in test query parameters in the panel
+          - The user clicks Run Test
+        then:
+          - The server resolves the target notebook via routing rules
+          - The notebook is executed by the warm Python worker
+          - The panel displays execution output, duration, and resolved env variables
+          - LastExecutionData is updated with status success
+
+      - id: sc_wft_error
+        title: Workflow test captures notebook execution error
+        given:
+          - The notebook contains a runtime error
+        when:
+          - The user runs the workflow test
+        then:
+          - LastExecutionData is updated with status error and the error message
+          - The panel displays the error details and duration
+
+  - id: runner_management
+    title: Runner Management
+    description: Register, monitor, and sync remote runner instances that serve workflow API endpoints.
+    scenarios:
+      - id: sc_runner_add
+        title: User registers a new runner
+        given:
+          - The RunnersPanel is open
+        when:
+          - The user enters a runner name, URL, and API key
+          - The user clicks Add Runner
+        then:
+          - The runner is persisted to localStorage with status unknown
+          - It appears in the RunnersPanel list
+
+      - id: sc_runner_sync
+        title: User syncs workflows to a runner
+        given:
+          - A runner is registered and online
+          - Workflows exist in the workspace
+        when:
+          - The user clicks Sync on the runner
+        then:
+          - The current workflow and notebook configurations are pushed to the runner
+          - runner.lastSync is updated
+          - runner.workflowCount reflects the synced count
+
+      - id: sc_runner_online_count
+        title: Online runner count is shown in the sidebar
+        given:
+          - Multiple runners are registered with mixed statuses
+        when:
+          - The sidebar renders
+        then:
+          - The sidebar badge shows the count of online runners vs total runners
+
+  - id: settings_import_export
+    title: Settings and Import/Export
+    description: Export the full project as JSON and import projects from JSON backups via the Settings dialog.
+    scenarios:
+      - id: sc_settings_export
+        title: User exports the project
+        given:
+          - A project with data sources, notebooks, workflows, and runners exists
+        when:
+          - The user opens SettingsDialog and clicks Export
+        then:
+          - A ProjectExport JSON file is downloaded to the user's device
+          - The export includes all current entity data and a version field
+
+      - id: sc_settings_import
+        title: User imports a project export
+        given:
+          - The SettingsDialog is open
+        when:
+          - The user selects Import and uploads a valid ProjectExport JSON file
+        then:
+          - ImportProgress tracks each stage of the import
+          - Existing data is replaced with the imported data
+          - Notebook code files are synced to the server
+
+  - id: notebook_execution_context
+    title: Notebook Execution Context (marimo_ctx)
+    description: The Python-side runtime context injected into every notebook execution that provides typed access to data sources, environment variables, and request metadata.
+    scenarios:
+      - id: sc_ctx_sources_read
+        title: Notebook reads data from a connected SQLite source
+        given:
+          - A notebook is executing with a CtxConfig containing a SQLite source named "db"
+          - The source has read permission
+        when:
+          - 'Notebook code calls ctx.sources.get("db").read("users", filter={"active": True})'
+        then:
+          - The SQLiteSource executes a filtered SELECT on the users table
+          - A list of matching record dicts is returned to the notebook
+
+      - id: sc_ctx_permission_denied
+        title: Notebook is denied a disallowed write operation
+        given:
+          - A source has delete permission set to false
+        when:
+          - 'Notebook code calls ctx.sources.get("db").delete("users", {"id": 1})'
+        then:
+          - A PermissionDeniedError is raised with source name and operation details
+
+      - id: sc_ctx_env
+        title: Notebook reads injected environment variables
+        given:
+          - A workflow defines an env variable REPORT_DATE sourced from query param date
+          - The request includes query param date=2024-01-01
+        when:
+          - Notebook code calls ctx.env.get("REPORT_DATE")
+        then:
+          - The value "2024-01-01" is returned
+
+      - id: sc_ctx_source_not_found
+        title: Notebook requests a non-existent source
+        given:
+          - CtxConfig does not include a source named "missing"
+        when:
+          - Notebook code calls ctx.sources.get("missing")
+        then:
+          - A SourceNotFoundError is raised with the source name
+
+constraints:
+  - id: c_notebook_name_unique
+    name: Notebook Name Unique Within Workspace
+    description: No two notebooks in the same workspace may share the same name, since the name is used as the filename.
+    type: uniqueness
+    rule: notebook.name must be unique within notebook.workspaceId
+    entities:
+      - notebook
+
+  - id: c_workflow_name_unique
+    name: Workflow Name Unique Within Workspace
+    description: No two workflows in the same workspace may share the same name.
+    type: uniqueness
+    rule: workflow.name must be unique within workflow.workspaceId
+    entities:
+      - workflow
+
+  - id: c_datasource_name_unique
+    name: Data Source Name Unique Within Workspace
+    description: No two data sources in the same workspace may share the same name, as the name is the key used in ctx.sources.
+    type: uniqueness
+    rule: data_source.name must be unique within data_source.workspaceId
+    entities:
+      - data_source
+
+  - id: c_workspace_slug_unique
+    name: Workspace Slug Unique Within Project
+    description: Each workspace must have a unique URL-safe slug within its project.
+    type: uniqueness
+    rule: workspace.slug must be unique within workspace.projectId
+    entities:
+      - workspace
+
+  - id: c_lock_exclusive
+    name: Exclusive Notebook Lock
+    description: At most one active non-expired lock may exist for any given notebook at a time.
+    type: uniqueness
+    rule: At most one Lock with notebookId = X may exist where now() < expiresAt
+    entities:
+      - lock
+    actions:
+      - acquire_notebook_lock
+
+  - id: c_read_filter_required
+    name: Read Filter Required Enforcement
+    description: When a data source has readFilterRequired set to true, notebook code must supply a non-empty filter to the read operation or receive a PermissionDeniedError.
+    type: business_rule
+    rule: If source.permissions.readFilterRequired is true then read(table, filter) must have len(filter) > 0
+    entities:
+      - base_source
+    actions:
+      - read_from_source
+
+  - id: c_permission_check
+    name: Data Source Operation Permission Check
+    description: Every CRUD and direct-query operation on a data source must be gated by the corresponding permission flag; otherwise a PermissionDeniedError is raised.
+    type: business_rule
+    rule: |
+      create requires permissions.create == true
+      read requires permissions.read == true
+      update requires permissions.update == true
+      delete requires permissions.delete == true
+      query/execute requires permissions.directQuery == true
+    entities:
+      - base_source
+    actions:
+      - read_from_source
+      - write_to_source
+
+  - id: c_workflow_routing_fallback
+    name: Workflow Routing Must Have Fallback Strategy
+    description: Every workflow routing config must define a fallback strategy of either default_notebook (with a defaultNotebookId) or error to handle unmatched requests.
+    type: business_rule
+    rule: |
+      routingConfig.fallback must be one of ['default_notebook', 'error']
+      if fallback == 'default_notebook' then defaultNotebookId must not be null
+    entities:
+      - workflow
+    actions:
+      - execute_workflow
+      - test_workflow
+
+  - id: c_runner_api_key
+    name: Runner API Key Required
+    description: All inbound requests to the runner's workflow execution endpoint must include a valid Authorization bearer token matching the stored API key.
+    type: business_rule
+    rule: request.headers.Authorization must equal "Bearer " + runner.apiKey
+    actions:
+      - execute_workflow
+
+  - id: c_lock_heartbeat_ttl
+    name: Lock Must Be Refreshed Before TTL Expiry
+    description: An edit lock expires if the client does not call heartbeat within the lock TTL window, allowing another session to acquire the lock.
+    type: state_machine
+    rule: lock.expiresAt > now() must hold for lock to remain valid; heartbeat resets expiresAt = now() + TTL
+    entities:
+      - lock
+    actions:
+      - heartbeat_lock
+      - acquire_notebook_lock
+
+  - id: c_project_singleton
+    name: Single Active Project
+    description: The studio supports exactly one active project at a time per browser localStorage context.
+    type: business_rule
+    rule: At most one Project record may exist in localStorage at any time
+    entities:
+      - project
+
+traceability:
+  - from: project
+    to: "src/storage/types.ts:Project"
+    relation: represented_by
+    description: Project entity is defined as a TypeScript interface in storage types
+
+  - from: project
+    to: "src/storage/localStorage.ts:getProject"
+    relation: implements
+    description: getProject reads the active Project from localStorage
+
+  - from: project
+    to: "src/storage/localStorage.ts:setProject"
+    relation: implements
+    description: setProject persists a Project to localStorage
+
+  - from: workspace
+    to: "src/storage/types.ts:Workspace"
+    relation: represented_by
+    description: Workspace entity is defined as a TypeScript interface in storage types
+
+  - from: workspace
+    to: "src/storage/localStorage.ts:getWorkspace"
+    relation: implements
+    description: getWorkspace reads the active Workspace from localStorage
+
+  - from: data_source
+    to: "src/storage/types.ts:DataSource"
+    relation: represented_by
+    description: DataSource entity is defined as a TypeScript interface in storage types
+
+  - from: data_source
+    to: "src/storage/types.ts:DataSourcePermissions"
+    relation: represented_by
+    description: DataSourcePermissions sub-object is defined in storage types
+
+  - from: data_source
+    to: "src/storage/localStorage.ts:addDataSource"
+    relation: implements
+    description: addDataSource persists a new DataSource to localStorage
+
+  - from: data_source
+    to: "src/storage/localStorage.ts:updateDataSource"
+    relation: implements
+    description: updateDataSource patches an existing DataSource in localStorage
+
+  - from: data_source
+    to: "src/storage/localStorage.ts:deleteDataSource"
+    relation: implements
+    description: deleteDataSource removes a DataSource from localStorage
+
+  - from: data_source
+    to: "src/components/datasources/DataSourcesPanel.tsx:DataSourcesPanel"
+    relation: represented_by
+    description: DataSourcesPanel component renders and manages DataSource CRUD UI
+
+  - from: notebook
+    to: "src/storage/types.ts:Notebook"
+    relation: represented_by
+    description: Notebook entity is defined as a TypeScript interface in storage types
+
+  - from: notebook
+    to: "src/storage/localStorage.ts:addNotebook"
+    relation: implements
+    description: addNotebook persists a Notebook to localStorage
+
+  - from: notebook
+    to: "src/storage/localStorage.ts:updateNotebook"
+    relation: implements
+    description: updateNotebook patches an existing Notebook in localStorage
+
+  - from: notebook
+    to: "src/storage/localStorage.ts:deleteNotebook"
+    relation: implements
+    description: deleteNotebook removes a Notebook from localStorage
+
+  - from: notebook
+    to: "src/api/notebook-server.ts:createNotebook"
+    relation: implements
+    description: createNotebook API call writes the notebook file on the server
+
+  - from: notebook
+    to: "src/api/notebook-server.ts:deleteNotebook"
+    relation: implements
+    description: deleteNotebook API call removes the notebook file from the server
+
+  - from: notebook
+    to: "src/api/notebook-server.ts:saveNotebookCode"
+    relation: implements
+    description: saveNotebookCode persists notebook code to server file store
+
+  - from: notebook
+    to: "server/store/file-store.ts:FileStore"
+    relation: implements
+    description: FileStore is the server-side persistence layer for notebook code files
+
+  - from: notebook
+    to: "server/store/interface.ts:NotebookStore"
+    relation: implements
+    description: NotebookStore interface abstracts the file-backed notebook storage
+
+  - from: notebook_metadata
+    to: "server/store/interface.ts:NotebookMetadata"
+    relation: represented_by
+    description: NotebookMetadata interface defines lightweight notebook listing records
+
+  - from: notebook_metadata
+    to: "server/types.ts:NotebookMetadata"
+    relation: represented_by
+    description: NotebookMetadata is also defined in server types module
+
+  - from: workflow
+    to: "src/storage/types.ts:Workflow"
+    relation: represented_by
+    description: Workflow entity is defined as a TypeScript interface in storage types
+
+  - from: workflow
+    to: "src/storage/localStorage.ts:addWorkflow"
+    relation: implements
+    description: addWorkflow persists a Workflow to localStorage
+
+  - from: workflow
+    to: "src/storage/localStorage.ts:updateWorkflow"
+    relation: implements
+    description: updateWorkflow patches a Workflow in localStorage
+
+  - from: routing_rule
+    to: "src/storage/types.ts:RoutingRule"
+    relation: represented_by
+    description: RoutingRule interface defined in storage types
+
+  - from: routing_rule
+    to: "server/api/workflows.ts:RoutingRule"
+    relation: represented_by
+    description: RoutingRule also defined on the server side for workflow execution
+
+  - from: routing_rule
+    to: "server/api/workflows.ts:resolveNotebook"
+    relation: implements
+    description: resolveNotebook evaluates routing rules to determine the target notebook
+
+  - from: env_variable
+    to: "src/storage/types.ts:EnvVariable"
+    relation: represented_by
+    description: EnvVariable interface defined in storage types
+
+  - from: env_variable
+    to: "server/api/workflows.ts:buildEnvVariables"
+    relation: implements
+    description: buildEnvVariables resolves EnvVariable definitions against query params at runtime
+
+  - from: runner
+    to: "src/storage/types.ts:Runner"
+    relation: represented_by
+    description: Runner entity is defined as a TypeScript interface in storage types
+
+  - from: runner
+    to: "src/storage/localStorage.ts:addRunner"
+    relation: implements
+    description: addRunner persists a Runner to localStorage
+
+  - from: runner
+    to: "src/components/runners/RunnersPanel.tsx:RunnersPanel"
+    relation: represented_by
+    description: RunnersPanel component renders and manages Runner CRUD UI
+
+  - from: lock
+    to: "server/lock/manager.ts:Lock"
+    relation: represented_by
+    description: Lock type defined in the lock manager module
+
+  - from: lock
+    to: "server/types.ts:Lock"
+    relation: represented_by
+    description: Lock type also present in server types for API layer
+
+  - from: lock
+    to: "server/lock/manager.ts:LockManager"
+    relation: implements
+    description: LockManager provides acquire/release/heartbeat/cleanup operations on Lock records
+
+  - from: marimo_instance
+    to: "server/marimo/manager.ts:MarimoInstance"
+    relation: represented_by
+    description: MarimoInstance type defined in Marimo manager module
+
+  - from: marimo_instance
+    to: "server/marimo/manager.ts:MarimoManager"
+    relation: implements
+    description: MarimoManager lifecycle-manages MarimoInstance records
+
+  - from: workflow_test_request
+    to: "server/api/workflows.ts:WorkflowTestRequest"
+    relation: represented_by
+    description: WorkflowTestRequest interface defined in server workflows API
+
+  - from: workflow_test_response
+    to: "server/api/workflows.ts:WorkflowTestResponse"
+    relation: represented_by
+    description: WorkflowTestResponse interface defined in server workflows API
+
+  - from: last_execution_data
+    to: "src/components/workflow/LastExecution.tsx:LastExecutionData"
+    relation: represented_by
+    description: LastExecutionData interface defined in the LastExecution component
+
+  - from: project_export
+    to: "src/storage/types.ts:ProjectExport"
+    relation: represented_by
+    description: ProjectExport interface defined in storage types
+
+  - from: project_export
+    to: "src/storage/localStorage.ts:exportAll"
+    relation: implements
+    description: exportAll serializes all storage entities into a ProjectExport object
+
+  - from: project_export
+    to: "src/storage/localStorage.ts:importAll"
+    relation: implements
+    description: importAll restores all entities from a ProjectExport into localStorage
+
+  - from: base_source
+    to: "marimo_ctx/sources/base.py:BaseSource"
+    relation: represented_by
+    description: BaseSource abstract class defines the data source CRUD interface
+
+  - from: base_source
+    to: "marimo_ctx/sources/sqlite.py:SQLiteSource"
+    relation: implements
+    description: SQLiteSource implements BaseSource for SQLite databases
+
+  - from: base_source
+    to: "marimo_ctx/sources/postgres.py:PostgresSource"
+    relation: implements
+    description: PostgresSource implements BaseSource for PostgreSQL databases
+
+  - from: ctx_config
+    to: "runner/config-generator.ts:CtxConfig"
+    relation: represented_by
+    description: CtxConfig interface defined in runner config-generator
+
+  - from: ctx_config
+    to: "server/sources/config-generator.ts:CtxConfig"
+    relation: represented_by
+    description: CtxConfig interface also defined in server sources config-generator
+
+  - from: ctx_config
+    to: "marimo_ctx/config.py:load_config"
+    relation: implements
+    description: load_config decodes the Base64 CtxConfig from the MARIMO_CTX_CONFIG env variable
+
+  - from: import_progress
+    to: "src/components/settings/SettingsDialog.tsx:ImportProgress"
+    relation: represented_by
+    description: ImportProgress interface defined in the SettingsDialog component
+
+  - from: create_project
+    to: "src/storage/context.tsx:StorageProvider"
+    relation: implements
+    description: StorageProvider initProject function creates project and workspace entities
+
+  - from: export_project
+    to: "src/storage/localStorage.ts:exportAll"
+    relation: implements
+    description: exportAll implements the export serialization logic
+
+  - from: import_project
+    to: "src/storage/localStorage.ts:importAll"
+    relation: implements
+    description: importAll implements the import restore logic
+
+  - from: import_project
+    to: "src/components/settings/SettingsDialog.tsx:SettingsDialog"
+    relation: implements
+    description: SettingsDialog orchestrates the import flow including notebook server sync
+
+  - from: add_data_source
+    to: "src/storage/context.tsx:StorageProvider"
+    relation: implements
+    description: StorageProvider addDataSource method creates and persists DataSource
+
+  - from: create_notebook
+    to: "src/components/notebook/NewNotebookForm.tsx:NewNotebookForm"
+    relation: implements
+    description: NewNotebookForm collects notebook creation inputs and calls create action
+
+  - from: create_notebook
+    to: "src/components/notebook/NewNotebookForm.tsx:generateNotebookCode"
+    relation: implements
+    description: generateNotebookCode produces the initial Python boilerplate for a new notebook
+
+  - from: create_notebook
+    to: "src/api/notebook-server.ts:createNotebook"
+    relation: implements
+    description: createNotebook API function writes the notebook file to the server
+
+  - from: delete_notebook
+    to: "src/api/notebook-server.ts:deleteNotebook"
+    relation: implements
+    description: deleteNotebook API function deletes the notebook file from the server
+
+  - from: edit_notebook
+    to: "src/api/notebook-server.ts:editNotebook"
+    relation: implements
+    description: editNotebook API function acquires the lock and starts a Marimo process
+
+  - from: edit_notebook
+    to: "server/api/notebooks.ts:createNotebookRoutes"
+    relation: implements
+    description: createNotebookRoutes sets up the POST /edit endpoint that backs editNotebook
+
+  - from: release_notebook
+    to: "src/api/notebook-server.ts:releaseNotebook"
+    relation: implements
+    description: releaseNotebook API function releases the edit lock
+
+  - from: save_notebook_code
+    to: "src/api/notebook-server.ts:saveNotebookCode"
+    relation: implements
+    description: saveNotebookCode API function persists code to the server file store
+
+  - from: acquire_notebook_lock
+    to: "server/lock/manager.ts:LockManager.acquire"
+    relation: implements
+    description: LockManager.acquire is the server-side lock acquisition implementation
+
+  - from: heartbeat_lock
+    to: "server/lock/manager.ts:LockManager.heartbeat"
+    relation: implements
+    description: LockManager.heartbeat extends lock expiry
+
+  - from: heartbeat_lock
+    to: "src/api/notebook-server.ts:heartbeatNotebook"
+    relation: implements
+    description: heartbeatNotebook client-side API call triggers the server heartbeat
+
+  - from: heartbeat_lock
+    to: "src/api/notebook-server.ts:useHeartbeat"
+    relation: implements
+    description: useHeartbeat React hook polls heartbeatNotebook on an interval
+
+  - from: release_lock
+    to: "server/lock/manager.ts:LockManager.release"
+    relation: implements
+    description: LockManager.release removes the lock record
+
+  - from: create_workflow
+    to: "src/components/workflow/NewWorkflowForm.tsx:NewWorkflowForm"
+    relation: implements
+    description: NewWorkflowForm collects workflow creation inputs and calls create action
+
+  - from: update_workflow
+    to: "src/components/workflow/WorkflowSettings.tsx:WorkflowSettings"
+    relation: implements
+    description: WorkflowSettings component handles workflow editing and save
+
+  - from: test_workflow
+    to: "src/components/editor/WorkflowTestPanel.tsx:WorkflowTestPanel"
+    relation: implements
+    description: WorkflowTestPanel component submits test requests and displays results
+
+  - from: test_workflow
+    to: "server/api/workflows.ts:createWorkflowRoutes"
+    relation: implements
+    description: createWorkflowRoutes sets up the POST /test endpoint for workflow testing
+
+  - from: execute_workflow
+    to: "runner/index.ts:executeNotebook"
+    relation: implements
+    description: executeNotebook function in runner handles live workflow API execution
+
+  - from: execute_workflow
+    to: "server/api/workflows.ts:executeNotebook"
+    relation: implements
+    description: executeNotebook in server workflows module executes via worker for test runs
+
+  - from: generate_encoded_config
+    to: "runner/config-generator.ts:generateEncodedConfig"
+    relation: implements
+    description: generateEncodedConfig in runner builds and encodes the CtxConfig
+
+  - from: generate_encoded_config
+    to: "server/sources/config-generator.ts:generateEncodedConfig"
+    relation: implements
+    description: generateEncodedConfig in server also builds CtxConfig for test executions
+
+  - from: execute_notebook_worker
+    to: "server/worker/manager.ts:WorkerManager.executeCode"
+    relation: implements
+    description: WorkerManager.executeCode sends code to the Python worker and captures output
+
+  - from: execute_notebook_worker
+    to: "runner/worker-manager.ts:WorkerManager.execute"
+    relation: implements
+    description: WorkerManager.execute in runner sends notebook to the Python worker
+
+  - from: execute_notebook_worker
+    to: "marimo_ctx/worker.py:execute_from_code"
+    relation: implements
+    description: execute_from_code is the Python worker function that compiles and runs notebooks
+
+  - from: read_from_source
+    to: "marimo_ctx/sources/base.py:BaseSource.read"
+    relation: implements
+    description: BaseSource.read is the abstract read method enforcing permissions
+
+  - from: read_from_source
+    to: "marimo_ctx/sources/sqlite.py:SQLiteSource.read"
+    relation: implements
+    description: SQLiteSource.read executes filtered SELECT on SQLite
+
+  - from: read_from_source
+    to: "marimo_ctx/sources/postgres.py:PostgresSource.read"
+    relation: implements
+    description: PostgresSource.read executes filtered SELECT on PostgreSQL
+
+  - from: write_to_source
+    to: "marimo_ctx/sources/base.py:BaseSource.create"
+    relation: implements
+    description: BaseSource.create is the abstract insert method enforcing permissions
+
+  - from: write_to_source
+    to: "marimo_ctx/sources/base.py:BaseSource.update"
+    relation: implements
+    description: BaseSource.update is the abstract update method enforcing permissions
+
+  - from: write_to_source
+    to: "marimo_ctx/sources/base.py:BaseSource.delete"
+    relation: implements
+    description: BaseSource.delete is the abstract delete method enforcing permissions
+
+  - from: add_runner
+    to: "src/storage/localStorage.ts:addRunner"
+    relation: implements
+    description: addRunner persists a Runner record to localStorage
+
+  - from: add_runner
+    to: "src/components/runners/RunnersPanel.tsx:RunnersPanel"
+    relation: implements
+    description: RunnersPanel component provides the Add Runner form UI
+
+  - from: project_setup
+    to: "src/components/setup/SetupWizard.tsx:SetupWizard"
+    relation: implements
+    description: SetupWizard orchestrates the multi-step first-run onboarding flow
+
+  - from: project_setup
+    to: "src/components/setup/WelcomeStep.tsx:WelcomeStep"
+    relation: implements
+    description: WelcomeStep is the first step of the setup wizard
+
+  - from: project_setup
+    to: "src/components/setup/ProjectStep.tsx:ProjectStep"
+    relation: implements
+    description: ProjectStep collects project/workspace names and handles import
+
+  - from: project_setup
+    to: "src/components/setup/CompleteStep.tsx:CompleteStep"
+    relation: implements
+    description: CompleteStep is the final onboarding confirmation step
+
+  - from: settings_import_export
+    to: "src/components/settings/SettingsDialog.tsx:SettingsDialog"
+    relation: implements
+    description: SettingsDialog provides the export download and import upload UI
+
+  - from: notebook_execution_context
+    to: "marimo_ctx/__init__.py:_Context"
+    relation: implements
+    description: _Context singleton provides ctx.sources, ctx.env, and ctx.request to notebooks
+
+  - from: notebook_execution_context
+    to: "marimo_ctx/sources/__init__.py:SourcesProxy"
+    relation: implements
+    description: SourcesProxy lazily instantiates and returns typed source adapters
+
+  - from: notebook_execution_context
+    to: "marimo_ctx/env.py:EnvProxy"
+    relation: implements
+    description: EnvProxy provides typed access to injected environment variables
+
+  - from: notebook_execution_context
+    to: "marimo_ctx/request.py:RequestProxy"
+    relation: implements
+    description: RequestProxy provides typed access to request metadata in notebooks
+
+  - from: c_lock_exclusive
+    to: "server/lock/manager.ts:LockManager.acquire"
+    relation: implements
+    description: LockManager.acquire enforces the exclusive lock constraint atomically
+
+  - from: c_read_filter_required
+    to: "marimo_ctx/sources/base.py:BaseSource.read"
+    relation: implements
+    description: BaseSource.read enforces the readFilterRequired constraint before querying
+
+  - from: c_permission_check
+    to: "marimo_ctx/sources/base.py:BaseSource"
+    relation: implements
+    description: BaseSource checks the relevant permission flag before each CRUD operation
+
+  - from: c_workflow_routing_fallback
+    to: "server/api/workflows.ts:resolveNotebook"
+    relation: implements
+    description: resolveNotebook applies the fallback strategy when no routing rule matches
+
+  - from: c_runner_api_key
+    to: "runner/index.ts:verifyApiKey"
+    relation: implements
+    description: verifyApiKey validates the Authorization header on every runner request

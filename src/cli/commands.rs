@@ -30,6 +30,9 @@ impl CommandRunner {
             Commands::List { operation } => self.run_list(operation),
             Commands::Migrate { operation } => self.run_migrate(operation),
             Commands::Trace { operation } => self.run_trace(operation),
+            Commands::Serve { file, port, no_open } => {
+                self.run_serve(file, port, no_open)
+            },
             Commands::ParseCode { input, output, format, exclude } => {
                 self.run_parse_code(input, output, format, exclude)
             },
@@ -576,6 +579,57 @@ impl CommandRunner {
         Ok(())
     }
     
+    fn run_serve(&self, file: String, port: u16, no_open: bool) -> Result<()> {
+        use std::sync::Arc;
+        use tokio::sync::{broadcast, RwLock};
+        use crate::serve::server::{AppState, run_server};
+        use crate::serve::watcher::start_watcher;
+
+        let content = fs::read_to_string(&file).map_err(|e| {
+            crate::error::FdmlError::project_error(format!("Failed to read file '{}': {}", file, e))
+        })?;
+        let document = parse_fdml_yaml(&content)?;
+
+        let file_path = PathBuf::from(&file).canonicalize().map_err(|e| {
+            crate::error::FdmlError::project_error(format!("Invalid path '{}': {}", file, e))
+        })?;
+
+        print_info(&format!(
+            "Serving {} ({} entities, {} actions, {} features, {} constraints, {} flows)",
+            file,
+            document.entities.len(),
+            document.actions.len(),
+            document.features.len(),
+            document.constraints.len(),
+            document.flows.len(),
+        ));
+
+        let document = Arc::new(RwLock::new(document));
+        let (tx, _) = broadcast::channel(16);
+
+        let state = AppState {
+            document: document.clone(),
+            file_path: file_path.clone(),
+            tx: tx.clone(),
+        };
+
+        let rt = tokio::runtime::Runtime::new().map_err(|e| {
+            crate::error::FdmlError::project_error(format!("Failed to create tokio runtime: {}", e))
+        })?;
+
+        rt.block_on(async move {
+            // Start file watcher
+            let _watcher = start_watcher(file_path, document, tx)
+                .map_err(|e| crate::error::FdmlError::project_error(format!("Watcher error: {}", e)))?;
+
+            run_server(state, port, no_open)
+                .await
+                .map_err(|e| crate::error::FdmlError::project_error(format!("Server error: {}", e)))?;
+
+            Ok(())
+        })
+    }
+
     fn run_parse_code(&self, input: String, output: Option<String>, format: String, exclude: Vec<String>) -> Result<()> {
         if self.verbose {
             print_info(&format!("Scanning source code in: {}", input));

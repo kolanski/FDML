@@ -31,6 +31,8 @@ generated/
 output/
 dist/
 build/
+web/dist/
+*.prompt.md
 
 # Node.js (in case of JS tooling)
 node_modules/
