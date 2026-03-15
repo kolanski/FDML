@@ -29,9 +29,7 @@ ehthumbs.db
 # Generated files
 generated/
 output/
-dist/
 build/
-web/dist/
 *.prompt.md
 
 # Node.js (in case of JS tooling)
