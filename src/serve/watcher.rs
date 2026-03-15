@@ -11,6 +11,7 @@ pub fn start_watcher(
     file_path: PathBuf,
     document: Arc<RwLock<FdmlDocument>>,
     tx: broadcast::Sender<()>,
+    extra_watch_paths: Vec<PathBuf>,
 ) -> anyhow::Result<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>> {
     let watched_path = file_path.clone();
 
@@ -59,9 +60,21 @@ pub fn start_watcher(
         },
     )?;
 
+    // Watch the main file
     debouncer
         .watcher()
         .watch(&watched_path, notify::RecursiveMode::NonRecursive)?;
+
+    // FDML 1.4: Also watch per-system spec files
+    for extra_path in &extra_watch_paths {
+        if extra_path.exists() {
+            if let Err(e) = debouncer.watcher().watch(extra_path, notify::RecursiveMode::NonRecursive) {
+                eprintln!("  Watch: could not watch spec file {:?}: {}", extra_path, e);
+            } else {
+                eprintln!("  Watch: also watching {:?}", extra_path);
+            }
+        }
+    }
 
     Ok(debouncer)
 }

@@ -8,6 +8,13 @@ export interface FdmlDocument {
   constraints: Constraint[];
   traceability: Traceability[];
   generation_rules: GenerationRule[];
+
+  // FDML 1.5: Architectural Level
+  contours: Contour[];
+  systems: SystemEntry[];
+  integrations: Integration[];
+  cross_flows: CrossFlow[];
+  shared_entities: SharedEntity[];
 }
 
 export interface Metadata {
@@ -135,4 +142,82 @@ export interface GenerationRule {
   triggers: string[];
   generates: string[];
   template?: string;
+}
+
+// --- FDML 1.5: Architectural Level ---
+
+export interface Contour {
+  id: string;
+  name: string;
+  description?: string;
+  trust_level?: 'public' | 'internal' | 'restricted' | 'critical';
+}
+
+export type SystemType = 'frontend' | 'gateway' | 'service' | 'worker' | 'database' | 'queue' | 'storage' | 'external';
+
+export interface SystemEntry {
+  id: string;
+  name: string;
+  description?: string;
+  type: SystemType;
+  technology?: string;
+  contour?: string;
+  spec?: string;
+  owner?: string;
+  components: string[];
+  relationships: Relationship[];
+}
+
+export type IntegrationType = 'http' | 'grpc' | 'queue' | 'event' | 'shared_db' | 'websocket' | 'file' | 'graphql';
+
+export interface Integration {
+  id: string;
+  from: string;
+  to: string;
+  type: IntegrationType;
+  protocol?: string;
+  description?: string;
+  async?: boolean;
+  endpoints: IntegrationEndpoint[];
+  channels: string[];
+  data_entities: string[];
+}
+
+export interface IntegrationEndpoint {
+  method: string;
+  path: string;
+  description?: string;
+}
+
+export interface CrossFlow {
+  id: string;
+  name: string;
+  description?: string;
+  trigger?: string;
+  steps: CrossFlowStep[];
+}
+
+export interface CrossFlowStep {
+  id: string;
+  system: string;
+  action?: string;
+  description?: string;
+  integration?: string;
+  on_success?: string;
+  on_failure?: string;
+}
+
+export interface SharedEntity {
+  entity: string;
+  description?: string;
+  canonical_system?: string;
+  contexts: SharedEntityContext[];
+}
+
+export interface SharedEntityContext {
+  system: string;
+  entity_id: string;
+  role?: 'source' | 'replica' | 'projection' | 'cache';
+  fields: string[];
+  notes?: string;
 }

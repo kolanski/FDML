@@ -133,6 +133,26 @@ pub enum Commands {
         /// Don't auto-open the browser
         #[arg(long)]
         no_open: bool,
+
+        /// Generate FDML spec from a project directory (shows live progress, then switches to viewer)
+        #[arg(long)]
+        generate: Option<String>,
+
+        /// Use fast model (haiku) for generation
+        #[arg(long)]
+        fast: bool,
+
+        /// Specific model to use for generation
+        #[arg(long)]
+        model: Option<String>,
+
+        /// LLM provider: "cli" or "api"
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// Number of parallel LLM calls for per-system generation (default: 1 = sequential)
+        #[arg(long, default_value = "1")]
+        parallel: usize,
     },
 
     /// Link code inventory to FDML spec — match classes→entities, methods→actions, modules→features
@@ -163,6 +183,41 @@ pub enum Commands {
         fast: bool,
 
         /// Specific model to use with --llm (default: sonnet)
+        #[arg(long)]
+        model: Option<String>,
+
+        /// LLM provider: "cli" (claude CLI) or "api" (ANTHROPIC_API_KEY). Default: auto-detect
+        #[arg(long)]
+        provider: Option<String>,
+    },
+
+    /// Scan a multi-system project and generate an FDML 1.4 platform spec
+    #[command(name = "scan-platform")]
+    ScanPlatform {
+        /// Root directory of the multi-system project
+        input: String,
+
+        /// Output file path (default: stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Output format (yaml, json, prompt)
+        #[arg(short, long, default_value = "yaml")]
+        format: String,
+
+        /// Directories to exclude from scanning (comma-separated)
+        #[arg(short, long, value_delimiter = ',')]
+        exclude: Vec<String>,
+
+        /// Send metaprompt to LLM and get FDML 1.4 spec back
+        #[arg(long)]
+        llm: bool,
+
+        /// Use fast model (haiku) for quick drafts
+        #[arg(long)]
+        fast: bool,
+
+        /// Specific model to use with --llm
         #[arg(long)]
         model: Option<String>,
 

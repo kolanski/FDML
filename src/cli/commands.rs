@@ -30,14 +30,17 @@ impl CommandRunner {
             Commands::List { operation } => self.run_list(operation),
             Commands::Migrate { operation } => self.run_migrate(operation),
             Commands::Trace { operation } => self.run_trace(operation),
-            Commands::Serve { file, port, no_open } => {
-                self.run_serve(file, port, no_open)
+            Commands::Serve { file, port, no_open, generate, fast, model, provider, parallel } => {
+                self.run_serve(file, port, no_open, generate, fast, model, provider, parallel)
             },
             Commands::ParseCode { input, output, format, exclude } => {
                 self.run_parse_code(input, output, format, exclude)
             },
             Commands::LinkCode { code, fdml, output, format, llm, fast, model, provider } => {
                 self.run_link_code(code, fdml, output, format, llm, fast, model, provider)
+            },
+            Commands::ScanPlatform { input, output, format, exclude, llm, fast, model, provider } => {
+                self.run_scan_platform(input, output, format, exclude, llm, fast, model, provider)
             },
         }
     }
@@ -579,48 +582,129 @@ impl CommandRunner {
         Ok(())
     }
     
-    fn run_serve(&self, file: String, port: u16, no_open: bool) -> Result<()> {
+    fn run_serve(
+        &self,
+        file: String,
+        port: u16,
+        no_open: bool,
+        generate: Option<String>,
+        fast: bool,
+        model: Option<String>,
+        provider: Option<String>,
+        parallel: usize,
+    ) -> Result<()> {
         use std::sync::Arc;
         use tokio::sync::{broadcast, RwLock};
-        use crate::serve::server::{AppState, run_server};
+        use crate::serve::server::{AppState, GenerationStatus, run_server};
         use crate::serve::watcher::start_watcher;
 
-        let content = fs::read_to_string(&file).map_err(|e| {
-            crate::error::FdmlError::project_error(format!("Failed to read file '{}': {}", file, e))
-        })?;
-        let document = parse_fdml_yaml(&content)?;
+        let is_generating = generate.is_some();
 
-        let file_path = PathBuf::from(&file).canonicalize().map_err(|e| {
-            crate::error::FdmlError::project_error(format!("Invalid path '{}': {}", file, e))
-        })?;
+        // If generating, start with empty doc; otherwise load from file
+        let (document, file_path) = if let Some(ref gen_dir) = generate {
+            let output_path = PathBuf::from(&file);
+            print_info(&format!("Generate mode: scanning {} → {}", gen_dir, file));
+            (
+                crate::parser::ast::FdmlDocument::default(),
+                output_path.canonicalize().unwrap_or_else(|_| {
+                    // File may not exist yet — use absolute path
+                    std::env::current_dir().unwrap_or_default().join(&file)
+                }),
+            )
+        } else {
+            let content = fs::read_to_string(&file).map_err(|e| {
+                crate::error::FdmlError::project_error(format!("Failed to read file '{}': {}", file, e))
+            })?;
+            let doc = parse_fdml_yaml(&content)?;
+            let fp = PathBuf::from(&file).canonicalize().map_err(|e| {
+                crate::error::FdmlError::project_error(format!("Invalid path '{}': {}", file, e))
+            })?;
 
-        print_info(&format!(
-            "Serving {} ({} entities, {} actions, {} features, {} constraints, {} flows)",
-            file,
-            document.entities.len(),
-            document.actions.len(),
-            document.features.len(),
-            document.constraints.len(),
-            document.flows.len(),
-        ));
+            if !doc.systems.is_empty() {
+                print_info(&format!(
+                    "Serving {} ({} systems, {} integrations)",
+                    file, doc.systems.len(), doc.integrations.len(),
+                ));
+            } else {
+                print_info(&format!(
+                    "Serving {} ({} entities, {} actions, {} features)",
+                    file, doc.entities.len(), doc.actions.len(), doc.features.len(),
+                ));
+            }
+            (doc, fp)
+        };
+
+        // FDML 1.4: Collect per-system spec file paths for watching
+        let base_dir = file_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let extra_watch_paths: Vec<PathBuf> = document
+            .systems
+            .iter()
+            .filter_map(|sys| sys.spec.as_ref().map(|p| base_dir.join(p)))
+            .collect();
 
         let document = Arc::new(RwLock::new(document));
         let (tx, _) = broadcast::channel(16);
+        let (log_tx, _) = broadcast::channel::<String>(256);
+        let generation_status = Arc::new(RwLock::new(if is_generating {
+            GenerationStatus {
+                phase: "scanning".to_string(),
+                progress: 0.0,
+                message: "Starting platform scan...".to_string(),
+            }
+        } else {
+            GenerationStatus::default()
+        }));
+
+        let log_buffer: std::sync::Arc<tokio::sync::RwLock<Vec<String>>> =
+            std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new()));
 
         let state = AppState {
             document: document.clone(),
             file_path: file_path.clone(),
             tx: tx.clone(),
+            log_tx: log_tx.clone(),
+            log_buffer: log_buffer.clone(),
+            generation_status: generation_status.clone(),
         };
 
         let rt = tokio::runtime::Runtime::new().map_err(|e| {
             crate::error::FdmlError::project_error(format!("Failed to create tokio runtime: {}", e))
         })?;
 
+        // In generate mode, ensure the output file exists so the watcher can watch it
+        if is_generating && !file_path.exists() {
+            if let Some(parent) = file_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let _ = fs::write(&file_path, "# FDML spec — generation in progress\n");
+        }
+
         rt.block_on(async move {
             // Start file watcher
-            let _watcher = start_watcher(file_path, document, tx)
+            let _watcher = start_watcher(file_path.clone(), document.clone(), tx.clone(), extra_watch_paths)
                 .map_err(|e| crate::error::FdmlError::project_error(format!("Watcher error: {}", e)))?;
+
+            // If --generate: spawn background generation task
+            if let Some(gen_dir) = generate {
+                let doc = document.clone();
+                let spec_tx = tx.clone();
+                let log = log_tx.clone();
+                let log_buf = log_buffer.clone();
+                let gen_status = generation_status.clone();
+                let out_file = file_path.clone();
+                let fast = fast;
+                let model = model.clone();
+                let provider = provider.clone();
+
+                let parallel = parallel;
+                tokio::task::spawn_blocking(move || {
+                    Self::run_generation_pipeline(
+                        &gen_dir, &out_file, fast, model.as_deref(), provider.as_deref(),
+                        parallel,
+                        doc, spec_tx, log, log_buf, gen_status,
+                    );
+                });
+            }
 
             run_server(state, port, no_open)
                 .await
@@ -628,6 +712,359 @@ impl CommandRunner {
 
             Ok(())
         })
+    }
+
+    fn run_generation_pipeline(
+        gen_dir: &str,
+        output_file: &std::path::Path,
+        fast: bool,
+        model: Option<&str>,
+        provider: Option<&str>,
+        parallel: usize,
+        document: std::sync::Arc<tokio::sync::RwLock<crate::parser::ast::FdmlDocument>>,
+        spec_tx: tokio::sync::broadcast::Sender<()>,
+        log_tx: tokio::sync::broadcast::Sender<String>,
+        log_buffer: std::sync::Arc<tokio::sync::RwLock<Vec<String>>>,
+        gen_status: std::sync::Arc<tokio::sync::RwLock<crate::serve::server::GenerationStatus>>,
+    ) {
+        use crate::linker::platform;
+
+        let log = |msg: String| {
+            eprintln!("  [gen] {}", msg);
+            let _ = log_tx.send(msg.clone());
+            // Buffer for late-connecting clients
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let buf = log_buffer.clone();
+                handle.block_on(async move {
+                    buf.write().await.push(msg);
+                });
+            }
+        };
+
+        let set_status = |phase: &str, progress: f32, message: &str| {
+            let gs = gen_status.clone();
+            let p = phase.to_string();
+            let m = message.to_string();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.block_on(async move {
+                    let mut s = gs.write().await;
+                    s.phase = p;
+                    s.progress = progress;
+                    s.message = m;
+                });
+            }
+        };
+
+        let root = Path::new(gen_dir);
+        if !root.exists() || !root.is_dir() {
+            log(format!("ERROR: Path does not exist or is not a directory: {}", gen_dir));
+            set_status("error", 0.0, "Invalid directory");
+            return;
+        }
+
+        // Read .fdmlignore
+        let ignore_entries = platform::read_fdmlignore(root);
+        let exclude: Vec<String> = ignore_entries;
+
+        // ── Stage 1: Detect systems ──
+        log("Stage 1: Detecting system boundaries...".to_string());
+        set_status("scanning", 0.05, "Detecting system boundaries...");
+
+        let detected = platform::detect_systems(root, &exclude);
+        if detected.is_empty() {
+            log("ERROR: No systems detected.".to_string());
+            set_status("error", 0.0, "No systems detected");
+            return;
+        }
+        log(format!("Found {} system(s):", detected.len()));
+        for sys in &detected {
+            log(format!("  {} ({}) — {} [{}]", sys.name, sys.id, sys.technology, sys.boundary_marker));
+        }
+
+        // ── Stage 2: Per-system scan + LLM ──
+        let max_parallel = parallel.max(1);
+        log(format!("Stage 2: Per-system analysis (parallel: {})...", max_parallel));
+        set_status("scanning", 0.1, "Scanning systems...");
+
+        let system_paths: Vec<String> = detected.iter().map(|s| s.path.clone()).collect();
+        let total = detected.len();
+
+        // First pass: scan all systems and prepare prompts (fast, always sequential)
+        struct SystemWork {
+            sys: crate::linker::types::DetectedSystem,
+            scan: crate::scanner::types::ScanResult,
+            report: crate::linker::types::LinkReport,
+            prompt: String,
+        }
+        let mut needs_llm: Vec<SystemWork> = Vec::new();
+        let mut system_data: Vec<(crate::linker::types::DetectedSystem, crate::scanner::types::ScanResult, crate::linker::types::LinkReport)> = Vec::new();
+        let mut per_system_prompts: Vec<(String, String)> = Vec::new();
+        let mut per_system_specs: Vec<(String, String)> = Vec::new();
+
+        for (idx, sys) in detected.iter().enumerate() {
+            let sys_path = root.join(&sys.path);
+            let sys_path_str = sys_path.to_string_lossy().to_string();
+
+            let mut sys_exclude = exclude.clone();
+            for other_path in &system_paths {
+                if other_path != &sys.path && other_path.starts_with(&format!("{}/", sys.path)) {
+                    if let Some(child_dir) = other_path.strip_prefix(&format!("{}/", sys.path)) {
+                        let top_dir = child_dir.split('/').next().unwrap_or(child_dir);
+                        if !sys_exclude.contains(&top_dir.to_string()) {
+                            sys_exclude.push(top_dir.to_string());
+                        }
+                    }
+                }
+            }
+
+            // Check if per-system spec already exists — skip LLM if so
+            let base = output_file.to_string_lossy();
+            let base_str = base.trim_end_matches(".yaml").trim_end_matches(".fdml");
+            let existing_spec_path = format!("{}.{}.fdml", base_str, sys.id);
+            if let Ok(existing_spec) = fs::read_to_string(&existing_spec_path) {
+                let lines = existing_spec.lines().count();
+                if lines > 10 {
+                    log(format!("[{}/{}] Reusing existing spec for {} ({} lines)", idx + 1, total, sys.name, lines));
+                    per_system_specs.push((sys.id.clone(), existing_spec));
+                    if let Ok(scan) = crate::scanner::scan_project(&sys_path_str, &sys_exclude) {
+                        let report = crate::linker::link_code(&scan, None, &sys_path_str, None);
+                        system_data.push((sys.clone(), scan, report));
+                    }
+                    continue;
+                }
+            }
+
+            log(format!("[{}/{}] Scanning {}...", idx + 1, total, sys.name));
+
+            match crate::scanner::scan_project(&sys_path_str, &sys_exclude) {
+                Ok(scan) => {
+                    let report = crate::linker::link_code(&scan, None, &sys_path_str, None);
+                    log(format!("  {} files, {} entities, {} actions",
+                        scan.metadata.total_files, report.entities.len(), report.actions.len()));
+                    let sys_prompt = crate::linker::generate_metaprompt(&report, &scan);
+                    per_system_prompts.push((sys.id.clone(), sys_prompt.clone()));
+                    needs_llm.push(SystemWork { sys: sys.clone(), scan, report, prompt: sys_prompt });
+                }
+                Err(e) => {
+                    log(format!("  Failed to scan {}: {}", sys.name, e));
+                }
+            }
+        }
+
+        // Second pass: LLM calls — parallel or sequential
+        if !needs_llm.is_empty() {
+            let llm_count = needs_llm.len();
+            log(format!("{} system(s) need LLM generation", llm_count));
+            set_status("generating", 0.2, &format!("Generating {} specs...", llm_count));
+
+            // Use scoped threads for parallel LLM calls
+            let results: Vec<(crate::linker::types::DetectedSystem, crate::scanner::types::ScanResult, crate::linker::types::LinkReport, Option<String>)>;
+            let base_str = {
+                let base = output_file.to_string_lossy();
+                base.trim_end_matches(".yaml").trim_end_matches(".fdml").to_string()
+            };
+
+            // Channel-based semaphore for limiting concurrency
+            let (sem_tx, sem_rx) = std::sync::mpsc::sync_channel::<()>(max_parallel);
+            for _ in 0..max_parallel { let _ = sem_tx.send(()); }
+            let sem_rx = std::sync::Arc::new(std::sync::Mutex::new(sem_rx));
+
+            results = std::thread::scope(|scope| {
+                let handles: Vec<_> = needs_llm.into_iter().enumerate().map(|(i, work)| {
+                    let log_tx = &log_tx;
+                    let log_buffer = &log_buffer;
+                    let sem_rx = sem_rx.clone();
+                    let sem_tx = sem_tx.clone();
+                    let base = base_str.clone();
+
+                    scope.spawn(move || {
+                        // Acquire semaphore permit (blocks until a slot is free)
+                        let _ = sem_rx.lock().unwrap().recv();
+
+                        let runner = CommandRunner::new(false);
+                        let prompt_kb = work.prompt.len() / 1024;
+
+                        let send_log = |msg: String| {
+                            eprintln!("  [gen] {}", msg);
+                            let _ = log_tx.send(msg.clone());
+                            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                                let buf = log_buffer.clone();
+                                handle.block_on(async move { buf.write().await.push(msg); });
+                            }
+                        };
+
+                        send_log(format!("[{}/{}] Sending {}KB prompt to LLM for {}...", i + 1, llm_count, prompt_kb, work.sys.name));
+
+                        let llm_start = std::time::Instant::now();
+
+                        // Ticker thread
+                        let ticker_log_tx = log_tx.clone();
+                        let ticker_buf = log_buffer.clone();
+                        let ticker_name = work.sys.name.clone();
+                        let ticker_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+                        let ticker_flag = ticker_running.clone();
+                        std::thread::spawn(move || {
+                            let mut secs = 0u64;
+                            while ticker_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                                std::thread::sleep(std::time::Duration::from_secs(5));
+                                if !ticker_flag.load(std::sync::atomic::Ordering::Relaxed) { break; }
+                                secs += 5;
+                                let msg = format!("  [{}/{}] Waiting for LLM ({})... {}s", i + 1, llm_count, ticker_name, secs);
+                                let _ = ticker_log_tx.send(msg.clone());
+                                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                                    let buf = ticker_buf.clone();
+                                    handle.block_on(async move { buf.write().await.push(msg); });
+                                }
+                            }
+                        });
+
+                        let llm_result = runner.call_llm(&work.prompt, fast, model, provider);
+                        ticker_running.store(false, std::sync::atomic::Ordering::Relaxed);
+
+                        // Release semaphore permit
+                        let _ = sem_tx.send(());
+
+                        let spec = match llm_result {
+                            Ok(spec) => {
+                                let elapsed = llm_start.elapsed().as_secs();
+                                let spec_lines = spec.lines().count();
+                                send_log(format!("[{}/{}] Got {}-line spec for {} ({}s)", i + 1, llm_count, spec_lines, work.sys.name, elapsed));
+
+                                let spec_path = format!("{}.{}.fdml", base, work.sys.id);
+                                if let Err(e) = fs::write(&spec_path, &spec) {
+                                    send_log(format!("  Warning: failed to save {}: {}", spec_path, e));
+                                } else {
+                                    send_log(format!("  Saved: {}", spec_path));
+                                }
+                                Some(spec)
+                            }
+                            Err(e) => {
+                                send_log(format!("[{}/{}] LLM failed for {}: {}", i + 1, llm_count, work.sys.name, e));
+                                None
+                            }
+                        };
+
+                        (work.sys, work.scan, work.report, spec)
+                    })
+                }).collect();
+
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+
+            for (sys, scan, report, spec) in results {
+                if let Some(s) = spec {
+                    per_system_specs.push((sys.id.clone(), s));
+                }
+                system_data.push((sys, scan, report));
+            }
+        }
+
+        if per_system_specs.is_empty() {
+            log("ERROR: No per-system specs generated. Cannot assemble.".to_string());
+            set_status("error", 0.0, "No specs generated");
+            return;
+        }
+
+        // ── Stage 3: Cross-system analysis + assembly ──
+        log("Stage 3: Cross-system analysis...".to_string());
+        set_status("generating", 0.7, "Cross-system analysis...");
+
+        let integration_hints = platform::detect_integrations(&system_data);
+        log(format!("  {} integration pattern(s)", integration_hints.len()));
+
+        let system_reports: Vec<(crate::linker::types::DetectedSystem, crate::linker::types::LinkReport)> =
+            system_data.iter().map(|(s, _, r)| (s.clone(), r.clone())).collect();
+        let shared_entity_hints = platform::detect_shared_entities(&system_reports);
+        log(format!("  {} shared entity candidate(s)", shared_entity_hints.len()));
+
+        let per_system_reports: Vec<(String, crate::linker::types::LinkReport)> =
+            system_data.iter().map(|(s, _, r)| (s.id.clone(), r.clone())).collect();
+
+        let platform_report = crate::linker::types::PlatformReport {
+            detected_systems: detected.clone(),
+            per_system: per_system_reports,
+            integration_hints,
+            shared_entity_hints,
+        };
+
+        let assembly_prompt = platform::generate_platform_metaprompt(
+            &platform_report,
+            &per_system_specs,
+            &per_system_prompts,
+        );
+
+        let assembly_kb = assembly_prompt.len() / 1024;
+        log(format!("Assembling platform FDML 1.4 spec via LLM ({}KB prompt, {} system specs)...",
+            assembly_kb, per_system_specs.len()));
+        set_status("generating", 0.8, "Assembling platform spec via LLM...");
+
+        let assembly_start = std::time::Instant::now();
+
+        // Ticker for assembly LLM
+        let ticker_log_tx2 = log_tx.clone();
+        let ticker_buf2 = log_buffer.clone();
+        let ticker_running2 = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let ticker_flag2 = ticker_running2.clone();
+        std::thread::spawn(move || {
+            let mut secs = 0u64;
+            while ticker_flag2.load(std::sync::atomic::Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                if !ticker_flag2.load(std::sync::atomic::Ordering::Relaxed) { break; }
+                secs += 5;
+                let msg = format!("  Assembling... {}s", secs);
+                let _ = ticker_log_tx2.send(msg.clone());
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    let buf = ticker_buf2.clone();
+                    handle.block_on(async move { buf.write().await.push(msg); });
+                }
+            }
+        });
+
+        let assembly_runner = CommandRunner::new(false);
+        let assembly_result = assembly_runner.call_llm(&assembly_prompt, fast, model, provider);
+        ticker_running2.store(false, std::sync::atomic::Ordering::Relaxed);
+
+        match assembly_result {
+            Ok(llm_result) => {
+                let elapsed = assembly_start.elapsed().as_secs();
+                log(format!("Assembly complete ({}s, {}-line spec)", elapsed, llm_result.lines().count()));
+
+                // Write output file
+                if let Err(e) = fs::write(output_file, &llm_result) {
+                    log(format!("ERROR: Failed to write output: {}", e));
+                    set_status("error", 0.0, &format!("Write failed: {}", e));
+                    return;
+                }
+                log(format!("Written to: {}", output_file.display()));
+
+                // Per-system specs already saved incrementally above
+
+                // Try to parse and load the result into the live viewer
+                match crate::parser::parse_fdml_yaml(&llm_result) {
+                    Ok(new_doc) => {
+                        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                            let doc = document.clone();
+                            let stx = spec_tx.clone();
+                            handle.block_on(async move {
+                                let mut w = doc.write().await;
+                                *w = new_doc;
+                                let _ = stx.send(());
+                            });
+                        }
+                        log("Spec loaded into viewer — switching to spec view.".to_string());
+                        set_status("done", 1.0, "Generation complete");
+                    }
+                    Err(e) => {
+                        log(format!("Warning: Generated spec has parse errors: {}. File saved but viewer may not display correctly.", e));
+                        set_status("done", 1.0, "Generation complete (with parse warnings)");
+                    }
+                }
+            }
+            Err(e) => {
+                log(format!("ERROR: Assembly LLM failed: {}", e));
+                set_status("error", 0.0, &format!("Assembly failed: {}", e));
+            }
+        }
     }
 
     fn run_parse_code(&self, input: String, output: Option<String>, format: String, exclude: Vec<String>) -> Result<()> {
@@ -803,6 +1240,242 @@ impl CommandRunner {
         Ok(())
     }
 
+    fn run_scan_platform(
+        &self,
+        input: String,
+        output: Option<String>,
+        format: String,
+        exclude: Vec<String>,
+        llm: bool,
+        fast: bool,
+        model: Option<String>,
+        provider: Option<String>,
+    ) -> Result<()> {
+        use crate::linker::platform;
+        use crate::linker::types::PlatformReport;
+
+        let root = Path::new(&input);
+        if !root.exists() || !root.is_dir() {
+            return Err(crate::error::FdmlError::project_error(
+                format!("Path does not exist or is not a directory: {}", input)
+            ));
+        }
+
+        // Read .fdmlignore if present
+        let ignore_entries = platform::read_fdmlignore(root);
+        let mut exclude = exclude;
+        exclude.extend(ignore_entries);
+
+        // ── Stage 1: Detect system boundaries ─────────────────────────
+        print_info(&format!("Scanning platform root: {}", input));
+        let detected = platform::detect_systems(root, &exclude);
+
+        if detected.is_empty() {
+            print_warning("No system boundaries detected. Ensure subdirectories contain package.json, pyproject.toml, Cargo.toml, go.mod, or Dockerfile.");
+            return Ok(());
+        }
+
+        print_success(&format!("Stage 1: Detected {} system(s):", detected.len()));
+        for sys in &detected {
+            print_info(&format!("  {} ({}) — {} [{}]", sys.name, sys.id, sys.technology, sys.boundary_marker));
+        }
+
+        // ── Stage 2: Per-system full scan + link-code ─────────────────
+        // For each system: scan → link → generate full metaprompt → (optionally) LLM
+        print_info("Stage 2: Per-system analysis...");
+
+        let mut system_data: Vec<(crate::linker::types::DetectedSystem, crate::scanner::types::ScanResult, crate::linker::types::LinkReport)> = Vec::new();
+        // per-system metaprompts (full link-code prompts)
+        let mut per_system_prompts: Vec<(String, String)> = Vec::new();
+        // per-system FDML specs (from LLM or empty)
+        let mut per_system_specs: Vec<(String, String)> = Vec::new();
+
+        // Build list of child system paths for exclusion during scanning
+        let system_paths: Vec<String> = detected.iter().map(|s| s.path.clone()).collect();
+
+        for sys in &detected {
+            let sys_path = root.join(&sys.path);
+            let sys_path_str = sys_path.to_string_lossy().to_string();
+
+            // Build exclude list: user excludes + sibling/child system dirs
+            let mut sys_exclude = exclude.clone();
+            for other_path in &system_paths {
+                if other_path != &sys.path && other_path.starts_with(&format!("{}/", sys.path)) {
+                    // This is a child system — exclude its directory name from scanning
+                    if let Some(child_dir) = other_path.strip_prefix(&format!("{}/", sys.path)) {
+                        let top_dir = child_dir.split('/').next().unwrap_or(child_dir);
+                        if !sys_exclude.contains(&top_dir.to_string()) {
+                            sys_exclude.push(top_dir.to_string());
+                        }
+                    }
+                }
+            }
+
+            print_info(&format!("  [{}/{}] Scanning {}...",
+                detected.iter().position(|s| s.id == sys.id).unwrap_or(0) + 1, detected.len(), sys.name));
+
+            match crate::scanner::scan_project(&sys_path_str, &sys_exclude) {
+                Ok(scan) => {
+                    let report = crate::linker::link_code(&scan, None, &sys_path_str, None);
+                    print_info(&format!("    {} files, {} entities, {} actions",
+                        scan.metadata.total_files, report.entities.len(), report.actions.len()));
+
+                    // Generate full link-code metaprompt for this system
+                    let sys_prompt = crate::linker::generate_metaprompt(&report, &scan);
+                    per_system_prompts.push((sys.id.clone(), sys_prompt.clone()));
+
+                    // If --llm: send each system through LLM to get per-system FDML spec
+                    if llm {
+                        let prompt_kb = sys_prompt.len() / 1024;
+                        let sys_idx = detected.iter().position(|s| s.id == sys.id).unwrap_or(0) + 1;
+                        print_info(&format!("    [{}/{}] Sending {}KB prompt to LLM for {}...",
+                            sys_idx, detected.len(), prompt_kb, sys.name));
+                        let llm_start = std::time::Instant::now();
+                        match self.call_llm(&sys_prompt, fast, model.as_deref(), provider.as_deref()) {
+                            Ok(spec) => {
+                                let elapsed = llm_start.elapsed().as_secs();
+                                let spec_lines = spec.lines().count();
+                                print_success(&format!("    [{}/{}] Got {}-line FDML spec for {} ({}s)",
+                                    sys_idx, detected.len(), spec_lines, sys.name, elapsed));
+                                per_system_specs.push((sys.id.clone(), spec));
+                            }
+                            Err(e) => {
+                                let elapsed = llm_start.elapsed().as_secs();
+                                print_warning(&format!("    [{}/{}] LLM failed for {} after {}s: {}",
+                                    sys_idx, detected.len(), sys.name, elapsed, e));
+                            }
+                        }
+                    }
+
+                    system_data.push((sys.clone(), scan, report));
+                }
+                Err(e) => {
+                    print_warning(&format!("    Failed to scan {}: {}", sys.name, e));
+                }
+            }
+        }
+
+        if system_data.is_empty() {
+            print_warning("No systems could be scanned successfully.");
+            return Ok(());
+        }
+
+        // ── Stage 3: Cross-system analysis + assembly ─────────────────
+        print_info("Stage 3: Cross-system analysis...");
+
+        let integration_hints = platform::detect_integrations(&system_data);
+        if !integration_hints.is_empty() {
+            print_info(&format!("  {} integration pattern(s)", integration_hints.len()));
+        }
+
+        let system_reports: Vec<(crate::linker::types::DetectedSystem, crate::linker::types::LinkReport)> =
+            system_data.iter().map(|(s, _, r)| (s.clone(), r.clone())).collect();
+        let shared_entity_hints = platform::detect_shared_entities(&system_reports);
+        if !shared_entity_hints.is_empty() {
+            print_info(&format!("  {} shared entity candidate(s)", shared_entity_hints.len()));
+        }
+
+        // Build platform report
+        let per_system_reports: Vec<(String, crate::linker::types::LinkReport)> =
+            system_data.iter().map(|(s, _, r)| (s.id.clone(), r.clone())).collect();
+
+        let platform_report = PlatformReport {
+            detected_systems: detected.clone(),
+            per_system: per_system_reports,
+            integration_hints,
+            shared_entity_hints,
+        };
+
+        // Generate the assembly metaprompt — includes per-system specs or full prompts
+        let assembly_prompt = platform::generate_platform_metaprompt(
+            &platform_report,
+            &per_system_specs,
+            &per_system_prompts,
+        );
+
+        // If --llm: final assembly call
+        if llm {
+            if per_system_specs.is_empty() {
+                print_warning("No per-system specs were generated. Cannot assemble platform spec.");
+                return Ok(());
+            }
+
+            let assembly_kb = assembly_prompt.len() / 1024;
+            print_info(&format!("Stage 3: Assembling platform FDML 1.4 spec via LLM ({}KB prompt, {} system specs)...",
+                assembly_kb, per_system_specs.len()));
+            let assembly_start = std::time::Instant::now();
+            let llm_result = self.call_llm(&assembly_prompt, fast, model.as_deref(), provider.as_deref())?;
+            let assembly_elapsed = assembly_start.elapsed().as_secs();
+            print_success(&format!("Stage 3: Assembly complete ({}s, {}-line spec)",
+                assembly_elapsed, llm_result.lines().count()));
+
+            if let Some(ref output_path) = output {
+                fs::write(output_path, &llm_result).map_err(|e| {
+                    crate::error::FdmlError::project_error(format!("Failed to write output: {}", e))
+                })?;
+                print_success(&format!("FDML 1.4 platform spec written to: {}", output_path));
+
+                // Save per-system specs alongside
+                let base = output_path.trim_end_matches(".yaml").trim_end_matches(".fdml");
+                for (sys_id, spec) in &per_system_specs {
+                    let spec_path = format!("{}.{}.fdml", base, sys_id);
+                    let _ = fs::write(&spec_path, spec);
+                    print_info(&format!("  Per-system spec: {}", spec_path));
+                }
+
+                // Save assembly prompt
+                let prompt_path = format!("{}.prompt.md", base);
+                let _ = fs::write(&prompt_path, &assembly_prompt);
+                print_info(&format!("  Assembly prompt: {}", prompt_path));
+            } else {
+                println!("{}", llm_result);
+            }
+
+            return Ok(());
+        }
+
+        // Non-LLM output
+        let output_str = match format.as_str() {
+            "json" => serde_json::to_string_pretty(&platform_report)
+                .map_err(|e| crate::error::FdmlError::project_error(format!("JSON error: {}", e)))?,
+            "prompt" => assembly_prompt.clone(),
+            "yaml" | _ => serde_yaml::to_string(&platform_report)
+                .map_err(|e| crate::error::FdmlError::project_error(format!("YAML error: {}", e)))?,
+        };
+
+        if let Some(ref output_path) = output {
+            fs::write(output_path, &output_str).map_err(|e| {
+                crate::error::FdmlError::project_error(format!("Failed to write output: {}", e))
+            })?;
+            print_success(&format!("Platform report written to: {}", output_path));
+
+            // Save per-system metaprompts for manual LLM usage
+            let base = output_path.trim_end_matches(".yaml").trim_end_matches(".json");
+            for (sys_id, prompt) in &per_system_prompts {
+                let prompt_path = format!("{}.{}.prompt.md", base, sys_id);
+                let _ = fs::write(&prompt_path, prompt);
+            }
+            print_info(&format!("  {} per-system prompts saved (for manual LLM usage)", per_system_prompts.len()));
+
+            if format != "prompt" {
+                let prompt_path = format!("{}.prompt.md", base);
+                let _ = fs::write(&prompt_path, &assembly_prompt);
+                print_success(&format!("Platform assembly prompt: {}", prompt_path));
+            }
+        } else {
+            println!("{}", output_str);
+        }
+
+        print_success(&format!(
+            "Platform scan complete: {} systems, {} integrations, {} shared entities",
+            platform_report.detected_systems.len(),
+            platform_report.integration_hints.len(),
+            platform_report.shared_entity_hints.len(),
+        ));
+
+        Ok(())
+    }
+
     /// Call LLM — provider selection: "cli" forces claude CLI, "api" forces API, None = auto
     fn call_llm(&self, prompt: &str, fast: bool, model: Option<&str>, provider: Option<&str>) -> Result<String> {
         let prompt_lines = prompt.lines().count();
@@ -860,17 +1533,18 @@ impl CommandRunner {
         // Use serde_json to build the request (safe escaping)
         let request = serde_json::json!({
             "model": model_name,
-            "max_tokens": 8192,
+            "max_tokens": 16384,
             "system": system_msg,
             "messages": [{"role": "user", "content": prompt}]
         });
 
-        let tmp_body = std::env::temp_dir().join("fdml_llm_request.json");
+        let tmp_body = std::env::temp_dir().join(format!("fdml_llm_request_{:?}.json", std::thread::current().id()));
         fs::write(&tmp_body, request.to_string()).map_err(|e| {
             crate::error::FdmlError::project_error(format!("Failed to write request: {}", e))
         })?;
 
-        eprintln!("  ℹ Sending request...");
+        let prompt_tokens_est = prompt.len() / 4; // rough estimate
+        eprintln!("  ℹ Sending request (~{}K tokens)...", prompt_tokens_est / 1000);
 
         let output = Command::new("curl")
             .arg("-s")
@@ -938,7 +1612,7 @@ impl CommandRunner {
         eprintln!("  ℹ Model: {}", model_name);
 
         // Write prompt to temp file for piping via stdin
-        let tmp_prompt = std::env::temp_dir().join("fdml_link_prompt.md");
+        let tmp_prompt = std::env::temp_dir().join(format!("fdml_link_prompt_{:?}.md", std::thread::current().id()));
         fs::write(&tmp_prompt, prompt).map_err(|e| {
             crate::error::FdmlError::project_error(format!("Failed to write prompt: {}", e))
         })?;

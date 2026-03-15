@@ -10,11 +10,13 @@ interface ToolbarProps {
   onHealthClick: () => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
+  hasArchitecture?: boolean;
 }
 
 const TYPE_ORDER: NodeType[] = ['feature', 'action', 'entity', 'constraint', 'flow'];
 
-const VIEW_TABS: { id: ViewMode; label: string }[] = [
+const VIEW_TABS: { id: ViewMode; label: string; archOnly?: boolean }[] = [
+  { id: 'architecture', label: 'Architecture', archOnly: true },
   { id: 'spec', label: 'Spec' },
   { id: 'graph', label: 'Graph' },
   { id: 'flows', label: 'Flows' },
@@ -29,6 +31,7 @@ export default function Toolbar({
   onHealthClick,
   searchQuery,
   onSearchChange,
+  hasArchitecture,
 }: ToolbarProps) {
   const scoreColor =
     healthScore === null
@@ -88,7 +91,7 @@ export default function Toolbar({
 
       {/* View tabs */}
       <div style={{ display: 'flex', gap: 2 }}>
-        {VIEW_TABS.map((tab) => (
+        {VIEW_TABS.filter((tab) => !tab.archOnly || hasArchitecture).map((tab) => (
           <button
             key={tab.id}
             onClick={() => onViewChange(tab.id)}

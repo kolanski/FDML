@@ -25,5 +25,5 @@ export function useSpec() {
     return unsub;
   }, [fetchSpec]);
 
-  return { spec, error, loading };
+  return { spec, error, loading, refetch: fetchSpec };
 }

@@ -1,4 +1,5 @@
 pub mod types;
+pub mod platform;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -68,7 +69,7 @@ pub fn link_code(
 
 /// Normalize a name for comparison: CamelCase → snake_case, strip underscores
 /// Handles acronyms: SlowAPIMiddleware → slow_api_middleware (not slow_a_p_i_middleware)
-fn normalize_name(name: &str) -> String {
+pub fn normalize_name(name: &str) -> String {
     let chars: Vec<char> = name.chars().collect();
     let mut result = String::new();
     let len = chars.len();
@@ -124,7 +125,7 @@ fn is_test_name(name: &str) -> bool {
 }
 
 /// Compute similarity score between two normalized names (0.0 - 1.0)
-fn name_similarity(a: &str, b: &str) -> f64 {
+pub fn name_similarity(a: &str, b: &str) -> f64 {
     let na = normalize_name(a);
     let nb = normalize_name(b);
 
@@ -549,6 +550,8 @@ fn suggest_features(
     // Group entities and actions by module
     let mut module_entities: HashMap<String, Vec<String>> = HashMap::new();
     let mut module_actions: HashMap<String, Vec<String>> = HashMap::new();
+    // Also track action names per module for semantic grouping
+    let mut module_action_names: HashMap<String, Vec<(String, String)>> = HashMap::new(); // module -> [(action_id, action_name)]
 
     for file in &scan.files {
         // Skip test files from feature suggestions
@@ -573,6 +576,8 @@ fn suggest_features(
         for action in actions {
             if action.code_ref.starts_with(&file.file_path) {
                 module_actions.entry(module.clone()).or_default().push(action.action_id.clone());
+                module_action_names.entry(module.clone()).or_default()
+                    .push((action.action_id.clone(), action.action_name.clone()));
             }
         }
     }
@@ -589,25 +594,26 @@ fn suggest_features(
     for module in &all_modules {
         let ents = module_entities.get(module).cloned().unwrap_or_default();
         let acts = module_actions.get(module).cloned().unwrap_or_default();
+        let act_names = module_action_names.get(module).cloned().unwrap_or_default();
 
         if ents.is_empty() && acts.is_empty() {
             continue;
         }
 
+        // For large modules (>8 actions), try semantic sub-grouping by name prefix
+        if acts.len() > 8 {
+            let sub_features = split_module_into_semantic_features(
+                module, &ents, &act_names, entities,
+            );
+            if sub_features.len() > 1 {
+                features.extend(sub_features);
+                continue;
+            }
+        }
+
         // Generate human-readable title from module name
         let last_segment = module.split('.').last().unwrap_or(module);
-        let title = last_segment
-            .replace('_', " ")
-            .split(' ')
-            .map(|w| {
-                let mut c = w.chars();
-                match c.next() {
-                    None => String::new(),
-                    Some(f) => f.to_uppercase().to_string() + c.as_str(),
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
+        let title = titlecase_name(last_segment);
 
         features.push(FeatureSuggestion {
             feature_id: normalize_name(last_segment),
@@ -619,6 +625,288 @@ fn suggest_features(
             actions: acts,
         });
     }
+}
+
+/// Split a large module into semantic sub-features using IDF-weighted token
+/// similarity and agglomerative clustering.
+fn split_module_into_semantic_features(
+    module: &str,
+    all_entity_ids: &[String],
+    action_names: &[(String, String)], // (action_id, action_name)
+    entities: &[EntityLink],
+) -> Vec<FeatureSuggestion> {
+    use std::collections::HashSet;
+
+    if action_names.len() < 4 {
+        return Vec::new();
+    }
+
+    // ── Phase 1: Tokenize all action names ──
+    let tokenized: Vec<(String, Vec<String>)> = action_names.iter()
+        .map(|(id, name)| (id.clone(), tokenize_action_name(name)))
+        .collect();
+
+    // ── Phase 2: Compute IDF weights ──
+    let _n = tokenized.len() as f64;
+    let mut doc_freq: HashMap<String, usize> = HashMap::new();
+    for (_, tokens) in &tokenized {
+        let unique: HashSet<&String> = tokens.iter().collect();
+        for tok in unique {
+            *doc_freq.entry(tok.clone()).or_default() += 1;
+        }
+    }
+
+    // No explicit weighting — plain Jaccard similarity handles everything.
+    // Short tokens (<=2 chars) are still excluded as they're grammatical noise.
+    let weights: HashMap<String, f64> = doc_freq.keys()
+        .map(|tok| {
+            let w = if tok.len() <= 2 { 0.0 } else { 1.0 };
+            (tok.clone(), w)
+        })
+        .collect();
+
+    // All functions go through clustering — no hardcoded pattern groups
+    let remaining: Vec<(usize, String, Vec<String>)> = action_names.iter().enumerate()
+        .map(|(i, (id, _))| (i, id.clone(), tokenized[i].1.clone()))
+        .collect();
+
+    if remaining.len() < 4 {
+        return Vec::new(); // not enough to cluster
+    }
+
+    // ── Phase 4: Pairwise weighted Jaccard similarity ──
+    let rm = remaining.len();
+    let mut sim = vec![vec![0.0f64; rm]; rm];
+
+    for i in 0..rm {
+        for j in (i + 1)..rm {
+            let toks_a: HashSet<&String> = remaining[i].2.iter()
+                .filter(|t| weights.get(*t).copied().unwrap_or(0.0) > 0.0)
+                .collect();
+            let toks_b: HashSet<&String> = remaining[j].2.iter()
+                .filter(|t| weights.get(*t).copied().unwrap_or(0.0) > 0.0)
+                .collect();
+
+            let inter: f64 = toks_a.intersection(&toks_b)
+                .map(|t| weights.get(*t).copied().unwrap_or(0.0))
+                .sum();
+            let union: f64 = toks_a.union(&toks_b)
+                .map(|t| weights.get(*t).copied().unwrap_or(0.0))
+                .sum();
+
+            let s = if union > 0.0 { inter / union } else { 0.0 };
+            sim[i][j] = s;
+            sim[j][i] = s;
+        }
+    }
+
+    // ── Phase 5: Agglomerative clustering (average-link) ──
+    let target = ((remaining.len() as f64).sqrt().ceil() as usize).clamp(3, 8);
+    let mut clusters: Vec<Vec<usize>> = (0..rm).map(|i| vec![i]).collect();
+
+    loop {
+        if clusters.len() <= target {
+            break;
+        }
+
+        // Find most similar pair (average-link)
+        let mut best_sim = -1.0f64;
+        let mut best_i = 0;
+        let mut best_j = 0;
+
+        for ci in 0..clusters.len() {
+            for cj in (ci + 1)..clusters.len() {
+                let mut total = 0.0;
+                let mut count = 0;
+                for &a in &clusters[ci] {
+                    for &b in &clusters[cj] {
+                        total += sim[a][b];
+                        count += 1;
+                    }
+                }
+                let avg = if count > 0 { total / count as f64 } else { 0.0 };
+                if avg > best_sim {
+                    best_sim = avg;
+                    best_i = ci;
+                    best_j = cj;
+                }
+            }
+        }
+
+        if best_sim < 0.05 {
+            break; // remaining clusters are too dissimilar
+        }
+
+        // Merge cluster j into cluster i
+        let merged_cluster = clusters[best_j].clone();
+        clusters[best_i].extend(merged_cluster);
+        clusters.remove(best_j);
+    }
+
+    // ── Phase 6: Name each cluster ──
+    let last_segment = module.split('.').last().unwrap_or(module);
+    let mut result: Vec<FeatureSuggestion> = Vec::new();
+
+    // Sweep singletons into utility
+    let mut utility_actions: Vec<String> = Vec::new();
+
+    for cluster in &clusters {
+        let action_ids: Vec<String> = cluster.iter().map(|&i| remaining[i].1.clone()).collect();
+
+        if action_ids.len() == 1 {
+            utility_actions.extend(action_ids);
+            continue;
+        }
+
+        // Find best name: token with highest coverage * weight
+        let mut token_scores: HashMap<String, (usize, f64)> = HashMap::new(); // token -> (member_count, weight)
+        for &idx in cluster {
+            let unique: HashSet<&String> = remaining[idx].2.iter().collect();
+            for tok in unique {
+                let w = weights.get(tok).copied().unwrap_or(0.0);
+                if w > 0.0 {
+                    let entry = token_scores.entry(tok.clone()).or_insert((0, w));
+                    entry.0 += 1;
+                }
+            }
+        }
+
+        let cluster_size = cluster.len() as f64;
+        let mut candidates: Vec<(String, f64)> = token_scores.iter()
+            .map(|(tok, (count, weight))| {
+                let coverage = *count as f64 / cluster_size;
+                (tok.clone(), coverage * weight)
+            })
+            .collect();
+        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let group_name = if let Some((name, score)) = candidates.first() {
+            if *score < 0.1 { "utility".to_string() } else { name.clone() }
+        } else {
+            "utility".to_string()
+        };
+
+        if group_name == "utility" {
+            utility_actions.extend(action_ids);
+            continue;
+        }
+
+        // Assign entities to this cluster
+        let group_entities = assign_entities_to_group(&action_ids, all_entity_ids, entities);
+
+        let feature_id = format!("{}_{}", normalize_name(last_segment), normalize_name(&group_name));
+        let title = titlecase_name(&group_name);
+
+        result.push(FeatureSuggestion {
+            feature_id,
+            title,
+            module_path: module.to_string(),
+            confidence: 0.0,
+            source: LinkSource::Suggested,
+            entities: group_entities,
+            actions: action_ids,
+        });
+    }
+
+    // Add utility group
+    if !utility_actions.is_empty() {
+        let group_entities = assign_entities_to_group(&utility_actions, all_entity_ids, entities);
+        result.push(FeatureSuggestion {
+            feature_id: format!("{}_utility", normalize_name(last_segment)),
+            title: format!("{} Utility", titlecase_name(last_segment)),
+            module_path: module.to_string(),
+            confidence: 0.0,
+            source: LinkSource::Suggested,
+            entities: group_entities,
+            actions: utility_actions,
+        });
+    }
+
+    result
+}
+
+/// Tokenize an action/function name into stemmed lowercase words
+fn tokenize_action_name(name: &str) -> Vec<String> {
+    let name = name.trim_start_matches('_');
+
+    // Split on snake_case
+    let parts: Vec<&str> = name.split('_').collect();
+
+    // Further split camelCase within each part, then stem
+    let mut tokens = Vec::new();
+    for part in parts {
+        for word in split_camel_case(part) {
+            let lower = word.to_lowercase();
+            if lower.len() > 1 {
+                tokens.push(cheap_stem(&lower));
+            }
+        }
+    }
+    tokens
+}
+
+/// Split camelCase into words: "getGameEnd" → ["get", "Game", "End"]
+fn split_camel_case(s: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+
+    for ch in s.chars() {
+        if ch.is_uppercase() && !current.is_empty() {
+            words.push(current);
+            current = String::new();
+        }
+        current.push(ch);
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+}
+
+/// No stemming — return word as-is. Plural handling is done at the clustering
+/// level via Jaccard similarity (functions sharing other tokens cluster together
+/// regardless of game/games difference).
+fn cheap_stem(word: &str) -> String {
+    word.to_string()
+}
+
+/// Assign entities to a group of actions by name matching
+fn assign_entities_to_group(
+    action_ids: &[String],
+    all_entity_ids: &[String],
+    entities: &[EntityLink],
+) -> Vec<String> {
+    let mut group_entities: Vec<String> = Vec::new();
+    for eid in all_entity_ids {
+        let eid_lower = eid.to_lowercase();
+        let matches = action_ids.iter().any(|aid| {
+            let aid_lower = aid.to_lowercase();
+            aid_lower.contains(&eid_lower) || eid_lower.contains(&aid_lower.split('_').next().unwrap_or(""))
+        });
+        let entity_match = entities.iter().any(|e| {
+            e.entity_id == *eid && action_ids.iter().any(|aid| {
+                aid.contains(&e.entity_name.to_lowercase().replace(' ', "_"))
+            })
+        });
+        if matches || entity_match {
+            group_entities.push(eid.clone());
+        }
+    }
+    group_entities
+}
+
+fn titlecase_name(s: &str) -> String {
+    s.replace('_', " ")
+        .split(' ')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().to_string() + c.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // ─── Step 5: Traceability ─────────────────────────────────────────

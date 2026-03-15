@@ -14,11 +14,29 @@ export default function ConstraintCard({ constraint, compact }: ConstraintCardPr
   if (compact) {
     return (
       <div style={{ fontSize: 12, color: '#666', padding: '2px 0' }}>
-        <span style={{ color: colors.badge, fontWeight: 500 }}>{constraint.name}</span>
-        {constraint.entities && constraint.entities.length > 0 && (
-          <span style={{ color: '#999', marginLeft: 6 }}>
-            ({constraint.entities.join(', ')})
-          </span>
+        <div
+          onClick={() => setExpanded(!expanded)}
+          style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'baseline', gap: 4 }}
+        >
+          <span style={{ fontSize: 9, color: '#999', width: 10, flexShrink: 0 }}>{expanded ? '\u25BC' : '\u25B6'}</span>
+          <span style={{ color: colors.badge, fontWeight: 500 }}>{constraint.name}</span>
+          {constraint.entities && constraint.entities.length > 0 && (
+            <span style={{ color: '#999', marginLeft: 4 }}>
+              ({constraint.entities.join(', ')})
+            </span>
+          )}
+        </div>
+        {expanded && (
+          <div style={{ padding: '4px 0 4px 14px', fontSize: 11 }}>
+            {constraint.description && (
+              <div style={{ color: '#555', marginBottom: 4 }}>{constraint.description}</div>
+            )}
+            {constraint.rule && (
+              <div style={{ color: '#555', fontFamily: 'monospace', fontSize: 10, background: '#f9fafb', padding: '4px 6px', borderRadius: 3 }}>
+                {constraint.rule}
+              </div>
+            )}
+          </div>
         )}
       </div>
     );

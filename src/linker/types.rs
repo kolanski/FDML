@@ -171,3 +171,59 @@ pub struct CoverageMetric {
     pub linked: usize,
     pub percentage: f64,
 }
+
+// ─── Platform-level types (scan-platform) ────────────────────────
+
+/// A detected system boundary within a multi-system project
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetectedSystem {
+    /// Relative path from project root
+    pub path: String,
+    /// Snake_case identifier
+    pub id: String,
+    /// Human-readable name
+    pub name: String,
+    /// frontend | service | worker | gateway | library
+    pub system_type: String,
+    /// e.g. "React + TypeScript", "FastAPI + Python"
+    pub technology: String,
+    /// File that triggered detection (e.g. "package.json")
+    pub boundary_marker: String,
+}
+
+/// A detected integration pattern between systems
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntegrationHint {
+    /// System that initiates the integration
+    pub from_system: String,
+    /// System that receives (if inferrable)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_system: Option<String>,
+    /// http | event | queue | shared_db | grpc | websocket
+    pub integration_type: String,
+    /// e.g. "REST/JSON", "Redis pub/sub", "gRPC"
+    pub technology: String,
+    /// File paths where evidence was found
+    pub evidence: Vec<String>,
+}
+
+/// A shared entity candidate across systems
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SharedEntityHint {
+    /// Canonical entity name
+    pub entity_name: String,
+    /// (system_id, field_names) for each system that has this entity
+    pub systems: Vec<(String, Vec<String>)>,
+    /// System with the most fields (likely the source of truth)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canonical_system: Option<String>,
+}
+
+/// Full output of scan-platform command
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformReport {
+    pub detected_systems: Vec<DetectedSystem>,
+    pub per_system: Vec<(String, LinkReport)>,
+    pub integration_hints: Vec<IntegrationHint>,
+    pub shared_entity_hints: Vec<SharedEntityHint>,
+}

@@ -11,6 +11,10 @@ const TYPE_ICONS: Record<NodeType, string> = {
   constraint: '\u26A0',
   flow: '\u2192',
   system: '\u2302',
+  contour: '\u25CB',
+  integration: '\u21C4',
+  cross_flow: '\u21D2',
+  shared_entity: '\u229E',
 };
 
 function SpecNode({ data }: NodeProps) {
