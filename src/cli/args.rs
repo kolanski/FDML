@@ -146,13 +146,25 @@ pub enum Commands {
         #[arg(long)]
         model: Option<String>,
 
-        /// LLM provider: "cli" or "api"
+        /// LLM provider: "cli", "api", or "ollama"
         #[arg(long)]
         provider: Option<String>,
 
         /// Number of parallel LLM calls for per-system generation (default: 1 = sequential)
         #[arg(long, default_value = "1")]
         parallel: usize,
+
+        /// Ollama base URL (default: http://localhost:11434)
+        #[arg(long)]
+        ollama_url: Option<String>,
+
+        /// Context window size for Ollama (default: auto-calculated from prompt size)
+        #[arg(long)]
+        num_ctx: Option<usize>,
+
+        /// Chunking strategy: "monolithic" (one big prompt) or "sectional" (split into sub-prompts)
+        #[arg(long)]
+        chunk_strategy: Option<String>,
     },
 
     /// Link code inventory to FDML spec — match classes→entities, methods→actions, modules→features
@@ -178,6 +190,10 @@ pub enum Commands {
         #[arg(long)]
         llm: bool,
 
+        /// Generate spec instantly from code analysis without LLM (heuristic classification)
+        #[arg(long)]
+        no_llm: bool,
+
         /// Use fast model (haiku) for quick drafts
         #[arg(long)]
         fast: bool,
@@ -186,9 +202,21 @@ pub enum Commands {
         #[arg(long)]
         model: Option<String>,
 
-        /// LLM provider: "cli" (claude CLI) or "api" (ANTHROPIC_API_KEY). Default: auto-detect
+        /// LLM provider: "cli", "api", or "ollama". Default: auto-detect
         #[arg(long)]
         provider: Option<String>,
+
+        /// Ollama base URL (default: http://localhost:11434)
+        #[arg(long)]
+        ollama_url: Option<String>,
+
+        /// Context window size for Ollama (default: auto-calculated)
+        #[arg(long)]
+        num_ctx: Option<usize>,
+
+        /// Chunking strategy: "monolithic" or "sectional"
+        #[arg(long)]
+        chunk_strategy: Option<String>,
     },
 
     /// Scan a multi-system project and generate an FDML 1.4 platform spec
@@ -221,9 +249,21 @@ pub enum Commands {
         #[arg(long)]
         model: Option<String>,
 
-        /// LLM provider: "cli" (claude CLI) or "api" (ANTHROPIC_API_KEY). Default: auto-detect
+        /// LLM provider: "cli", "api", or "ollama". Default: auto-detect
         #[arg(long)]
         provider: Option<String>,
+
+        /// Ollama base URL (default: http://localhost:11434)
+        #[arg(long)]
+        ollama_url: Option<String>,
+
+        /// Context window size for Ollama (default: auto-calculated)
+        #[arg(long)]
+        num_ctx: Option<usize>,
+
+        /// Chunking strategy: "monolithic" or "sectional"
+        #[arg(long)]
+        chunk_strategy: Option<String>,
     },
 }
 

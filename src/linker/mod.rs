@@ -1,5 +1,6 @@
 pub mod types;
 pub mod platform;
+pub mod assemble;
 
 use std::collections::HashMap;
 use std::path::Path;

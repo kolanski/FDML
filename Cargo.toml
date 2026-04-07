@@ -1,6 +1,6 @@
 [package]
 name = "fdml"
-version = "0.3.10"
+version = "0.3.11"
 edition = "2021"
 description = "FDML (Feature-Driven Modeling Language) CLI tools"
 authors = ["FDML Contributors"]
@@ -38,6 +38,7 @@ notify-debouncer-mini = "=0.5.0"
 open = "=5.3.2"
 tokio-stream = { version = "=0.1.17", features = ["sync"] }
 mime_guess = "=2.0.5"
+reqwest = { version = "0.12", features = ["json", "blocking"] }
 
 [dev-dependencies]
 tempfile = "3.0"

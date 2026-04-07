@@ -30,17 +30,17 @@ impl CommandRunner {
             Commands::List { operation } => self.run_list(operation),
             Commands::Migrate { operation } => self.run_migrate(operation),
             Commands::Trace { operation } => self.run_trace(operation),
-            Commands::Serve { file, port, no_open, generate, fast, model, provider, parallel } => {
-                self.run_serve(file, port, no_open, generate, fast, model, provider, parallel)
+            Commands::Serve { file, port, no_open, generate, fast, model, provider, parallel, ollama_url, num_ctx, chunk_strategy } => {
+                self.run_serve(file, port, no_open, generate, fast, model, provider, parallel, ollama_url, num_ctx, chunk_strategy)
             },
             Commands::ParseCode { input, output, format, exclude } => {
                 self.run_parse_code(input, output, format, exclude)
             },
-            Commands::LinkCode { code, fdml, output, format, llm, fast, model, provider } => {
-                self.run_link_code(code, fdml, output, format, llm, fast, model, provider)
+            Commands::LinkCode { code, fdml, output, format, llm, no_llm, fast, model, provider, ollama_url, num_ctx, chunk_strategy } => {
+                self.run_link_code(code, fdml, output, format, llm, no_llm, fast, model, provider, ollama_url, num_ctx, chunk_strategy)
             },
-            Commands::ScanPlatform { input, output, format, exclude, llm, fast, model, provider } => {
-                self.run_scan_platform(input, output, format, exclude, llm, fast, model, provider)
+            Commands::ScanPlatform { input, output, format, exclude, llm, fast, model, provider, ollama_url, num_ctx, chunk_strategy } => {
+                self.run_scan_platform(input, output, format, exclude, llm, fast, model, provider, ollama_url, num_ctx, chunk_strategy)
             },
         }
     }
@@ -592,6 +592,9 @@ impl CommandRunner {
         model: Option<String>,
         provider: Option<String>,
         parallel: usize,
+        ollama_url: Option<String>,
+        num_ctx: Option<usize>,
+        _chunk_strategy: Option<String>,
     ) -> Result<()> {
         use std::sync::Arc;
         use tokio::sync::{broadcast, RwLock};
@@ -695,12 +698,13 @@ impl CommandRunner {
                 let fast = fast;
                 let model = model.clone();
                 let provider = provider.clone();
+                let ollama_url = ollama_url.clone();
 
                 let parallel = parallel;
                 tokio::task::spawn_blocking(move || {
                     Self::run_generation_pipeline(
                         &gen_dir, &out_file, fast, model.as_deref(), provider.as_deref(),
-                        parallel,
+                        parallel, ollama_url.as_deref(), num_ctx,
                         doc, spec_tx, log, log_buf, gen_status,
                     );
                 });
@@ -721,6 +725,8 @@ impl CommandRunner {
         model: Option<&str>,
         provider: Option<&str>,
         parallel: usize,
+        ollama_url: Option<&str>,
+        num_ctx: Option<usize>,
         document: std::sync::Arc<tokio::sync::RwLock<crate::parser::ast::FdmlDocument>>,
         spec_tx: tokio::sync::broadcast::Sender<()>,
         log_tx: tokio::sync::broadcast::Sender<String>,
@@ -918,7 +924,7 @@ impl CommandRunner {
                             }
                         });
 
-                        let llm_result = runner.call_llm(&work.prompt, fast, model, provider);
+                        let llm_result = runner.call_llm(&work.prompt, fast, model, provider, ollama_url, num_ctx);
                         ticker_running.store(false, std::sync::atomic::Ordering::Relaxed);
 
                         // Release semaphore permit
@@ -1021,7 +1027,7 @@ impl CommandRunner {
         });
 
         let assembly_runner = CommandRunner::new(false);
-        let assembly_result = assembly_runner.call_llm(&assembly_prompt, fast, model, provider);
+        let assembly_result = assembly_runner.call_llm(&assembly_prompt, fast, model, provider, ollama_url, num_ctx);
         ticker_running2.store(false, std::sync::atomic::Ordering::Relaxed);
 
         match assembly_result {
@@ -1120,9 +1126,13 @@ impl CommandRunner {
         output: Option<String>,
         format: String,
         llm: bool,
+        no_llm: bool,
         fast: bool,
         model: Option<String>,
         provider: Option<String>,
+        ollama_url: Option<String>,
+        num_ctx: Option<usize>,
+        _chunk_strategy: Option<String>,
     ) -> Result<()> {
         if self.verbose {
             print_info(&format!("Linking code inventory: {}", code));
@@ -1163,7 +1173,7 @@ impl CommandRunner {
 
         // If --llm flag, send to LLM
         if llm {
-            let llm_result = self.call_llm(&metaprompt, fast, model.as_deref(), provider.as_deref())?;
+            let llm_result = self.call_llm(&metaprompt, fast, model.as_deref(), provider.as_deref(), ollama_url.as_deref(), num_ctx)?;
 
             // Write LLM result
             if let Some(ref output_path) = output {
@@ -1180,6 +1190,28 @@ impl CommandRunner {
                 print_info(&format!("Prompt saved to: {}", prompt_path));
             } else {
                 println!("{}", llm_result);
+            }
+
+            return Ok(());
+        }
+
+        // If --no-llm flag, build spec deterministically
+        if no_llm {
+            let spec_yaml = crate::linker::assemble::assemble_spec_no_llm(&report, &scan, None);
+
+            if let Some(ref output_path) = output {
+                fs::write(output_path, &spec_yaml).map_err(|e| {
+                    crate::error::FdmlError::project_error(format!("Failed to write spec: {}", e))
+                })?;
+                print_success(&format!("FDML spec generated (no LLM): {}", output_path));
+
+                // Stats
+                let entity_count = spec_yaml.matches("  - id:").count();
+                let action_count = report.actions.len();
+                let lines = spec_yaml.lines().count();
+                print_info(&format!("  {} entities, {} actions, {} lines", entity_count, action_count, lines));
+            } else {
+                println!("{}", spec_yaml);
             }
 
             return Ok(());
@@ -1250,6 +1282,9 @@ impl CommandRunner {
         fast: bool,
         model: Option<String>,
         provider: Option<String>,
+        ollama_url: Option<String>,
+        num_ctx: Option<usize>,
+        _chunk_strategy: Option<String>,
     ) -> Result<()> {
         use crate::linker::platform;
         use crate::linker::types::PlatformReport;
@@ -1331,7 +1366,7 @@ impl CommandRunner {
                         print_info(&format!("    [{}/{}] Sending {}KB prompt to LLM for {}...",
                             sys_idx, detected.len(), prompt_kb, sys.name));
                         let llm_start = std::time::Instant::now();
-                        match self.call_llm(&sys_prompt, fast, model.as_deref(), provider.as_deref()) {
+                        match self.call_llm(&sys_prompt, fast, model.as_deref(), provider.as_deref(), ollama_url.as_deref(), num_ctx) {
                             Ok(spec) => {
                                 let elapsed = llm_start.elapsed().as_secs();
                                 let spec_lines = spec.lines().count();
@@ -1404,7 +1439,7 @@ impl CommandRunner {
             print_info(&format!("Stage 3: Assembling platform FDML 1.4 spec via LLM ({}KB prompt, {} system specs)...",
                 assembly_kb, per_system_specs.len()));
             let assembly_start = std::time::Instant::now();
-            let llm_result = self.call_llm(&assembly_prompt, fast, model.as_deref(), provider.as_deref())?;
+            let llm_result = self.call_llm(&assembly_prompt, fast, model.as_deref(), provider.as_deref(), ollama_url.as_deref(), num_ctx)?;
             let assembly_elapsed = assembly_start.elapsed().as_secs();
             print_success(&format!("Stage 3: Assembly complete ({}s, {}-line spec)",
                 assembly_elapsed, llm_result.lines().count()));
@@ -1476,8 +1511,9 @@ impl CommandRunner {
         Ok(())
     }
 
-    /// Call LLM — provider selection: "cli" forces claude CLI, "api" forces API, None = auto
-    fn call_llm(&self, prompt: &str, fast: bool, model: Option<&str>, provider: Option<&str>) -> Result<String> {
+    /// Call LLM — provider selection: "cli", "api", "ollama", or None = auto
+    fn call_llm(&self, prompt: &str, fast: bool, model: Option<&str>, provider: Option<&str>,
+                 ollama_url: Option<&str>, num_ctx: Option<usize>) -> Result<String> {
         let prompt_lines = prompt.lines().count();
         let prompt_bytes = prompt.len();
         eprintln!("  ℹ Prompt: {} lines, {:.1} KB", prompt_lines, prompt_bytes as f64 / 1024.0);
@@ -1495,8 +1531,12 @@ impl CommandRunner {
                 })?;
                 self.call_anthropic_api(&api_key, prompt, fast, model)
             }
+            Some("ollama") => {
+                eprintln!("  ℹ Provider forced: Ollama");
+                self.call_ollama(prompt, model, num_ctx, ollama_url)
+            }
             _ => {
-                // Auto: try API key first, fall back to CLI
+                // Auto-detect: API key → Ollama → CLI
                 if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
                     match self.call_anthropic_api(&api_key, prompt, fast, model) {
                         Ok(result) => Ok(result),
@@ -1505,11 +1545,123 @@ impl CommandRunner {
                             self.call_claude_cli(prompt, fast, model)
                         }
                     }
+                } else if Self::is_ollama_running(ollama_url) {
+                    eprintln!("  ℹ Auto-detected: Ollama running");
+                    self.call_ollama(prompt, model, num_ctx, ollama_url)
                 } else {
                     self.call_claude_cli(prompt, fast, model)
                 }
             }
         }
+    }
+
+    /// Check if Ollama is running
+    fn is_ollama_running(ollama_url: Option<&str>) -> bool {
+        let base = ollama_url.unwrap_or("http://localhost:11434");
+        reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_millis(500))
+            .build()
+            .ok()
+            .and_then(|c| c.get(base).send().ok())
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+    }
+
+    /// Calculate appropriate num_ctx based on prompt size
+    fn calculate_num_ctx(prompt: &str) -> usize {
+        let estimated_tokens = prompt.len() / 4;
+        let needed = estimated_tokens + 4096; // room for response
+        let clamped = needed.min(131072).max(2048);
+        ((clamped + 1023) / 1024) * 1024 // round up to nearest 1024
+    }
+
+    /// Call Ollama API (local LLM)
+    fn call_ollama(&self, prompt: &str, model: Option<&str>, num_ctx: Option<usize>, ollama_url: Option<&str>) -> Result<String> {
+        let base = ollama_url
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("OLLAMA_URL").ok())
+            .unwrap_or_else(|| "http://localhost:11434".to_string());
+
+        let model_name = model.unwrap_or("gemma4");
+        let ctx = num_ctx.unwrap_or_else(|| Self::calculate_num_ctx(prompt));
+        let prompt_tokens_est = prompt.len() / 4;
+
+        eprintln!("  ℹ Provider: Ollama ({})", base);
+        eprintln!("  ℹ Model: {}", model_name);
+        eprintln!("  ℹ Context window: {} tokens (prompt ~{}K tokens)", ctx, prompt_tokens_est / 1000);
+
+        if prompt_tokens_est > ctx {
+            eprintln!("  ⚠ WARNING: Prompt (~{}K tokens) exceeds num_ctx ({}) — Ollama will silently truncate!",
+                prompt_tokens_est / 1000, ctx);
+            eprintln!("  ⚠ Consider using --chunk-strategy sectional or increasing --num-ctx");
+        }
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(600)) // 10 min timeout for large generations
+            .build()
+            .map_err(|e| crate::error::FdmlError::project_error(format!("HTTP client error: {}", e)))?;
+
+        let request = serde_json::json!({
+            "model": model_name,
+            "prompt": format!(
+                "You are an FDML specification generator. Output ONLY valid YAML — no markdown fences, no explanations. Start directly with YAML content.\n\n{}",
+                prompt
+            ),
+            "stream": false,
+            "options": {
+                "num_ctx": ctx,
+                "temperature": 0.1
+            }
+        });
+
+        eprintln!("  ℹ Sending request to Ollama...");
+        let start = std::time::Instant::now();
+
+        let response = client.post(format!("{}/api/generate", base))
+            .json(&request)
+            .send()
+            .map_err(|e| {
+                if e.is_connect() {
+                    crate::error::FdmlError::project_error(
+                        format!("Ollama not running at {}. Start it with: ollama serve", base)
+                    )
+                } else if e.is_timeout() {
+                    crate::error::FdmlError::project_error(
+                        "Ollama request timed out (10 min). Model may be too slow for this prompt size.".to_string()
+                    )
+                } else {
+                    crate::error::FdmlError::project_error(format!("Ollama request failed: {}", e))
+                }
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            let error_msg = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("error")?.as_str().map(String::from))
+                .unwrap_or(body);
+            return Err(crate::error::FdmlError::project_error(
+                format!("Ollama error ({}): {}", status, error_msg)
+            ));
+        }
+
+        let json: serde_json::Value = response.json().map_err(|e| {
+            crate::error::FdmlError::project_error(format!("Failed to parse Ollama response: {}", e))
+        })?;
+
+        let text = json.get("response")
+            .and_then(|r| r.as_str())
+            .ok_or_else(|| crate::error::FdmlError::project_error("No 'response' field in Ollama output".to_string()))?;
+
+        let elapsed = start.elapsed();
+        let eval_count = json.get("eval_count").and_then(|v| v.as_u64()).unwrap_or(0);
+        eprintln!("  ℹ Response: {} lines, {} tokens in {:.1}s ({:.0} tok/s)",
+            text.lines().count(), eval_count, elapsed.as_secs_f64(),
+            eval_count as f64 / elapsed.as_secs_f64());
+
+        print_success("LLM response received (Ollama)");
+        Ok(Self::strip_yaml_fences(text))
     }
 
     /// Call Anthropic API directly via curl (requires ANTHROPIC_API_KEY)
