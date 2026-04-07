@@ -1173,7 +1173,15 @@ impl CommandRunner {
 
         // If --llm flag, send to LLM
         if llm {
-            let llm_result = self.call_llm(&metaprompt, fast, model.as_deref(), provider.as_deref(), ollama_url.as_deref(), num_ctx)?;
+            // Use hybrid pipeline for Ollama, monolithic for Claude
+            let is_ollama = provider.as_deref() == Some("ollama")
+                || (provider.is_none() && Self::is_ollama_running(ollama_url.as_deref()));
+            let llm_result = if is_ollama {
+                eprintln!("  ℹ Using hybrid pipeline (cluster → classify → assemble)");
+                self.call_llm_hybrid(&report, &scan, model.as_deref(), ollama_url.as_deref(), num_ctx)?
+            } else {
+                self.call_llm(&metaprompt, fast, model.as_deref(), provider.as_deref(), ollama_url.as_deref(), num_ctx)?
+            };
 
             // Write LLM result
             if let Some(ref output_path) = output {
@@ -1509,6 +1517,112 @@ impl CommandRunner {
         ));
 
         Ok(())
+    }
+
+    /// Hybrid pipeline: cluster → LLM classify → deterministic assembly
+    fn call_llm_hybrid(
+        &self,
+        report: &crate::linker::types::LinkReport,
+        scan: &crate::scanner::types::ScanResult,
+        model: Option<&str>,
+        ollama_url: Option<&str>,
+        num_ctx: Option<usize>,
+    ) -> Result<String> {
+        use crate::linker::cluster::cluster_by_module;
+        use crate::linker::llm_classify::*;
+
+        let base_url = ollama_url
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("OLLAMA_URL").ok())
+            .unwrap_or_else(|| "http://localhost:11434".to_string());
+        let model_name = model.unwrap_or("gemma4");
+        let ctx = num_ctx.unwrap_or(8192);
+
+        // Step 1: Cluster
+        let clusters = cluster_by_module(report, 20);
+        eprintln!("  ℹ Clustered into {} groups", clusters.len());
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .map_err(|e| crate::error::FdmlError::project_error(format!("HTTP client error: {}", e)))?;
+
+        let mut all_entity_class: Vec<(String, String, String)> = Vec::new(); // (id, role, description)
+        let mut all_action_class: Vec<(String, String, String)> = Vec::new();
+
+        let sys_name = scan.metadata.codebase_path.split('/').last().unwrap_or("system");
+
+        // Step 2: Classify each cluster via Ollama
+        for (i, cluster) in clusters.iter().enumerate() {
+            eprintln!("  [{}/{}] Classifying cluster '{}' ({} items)...",
+                i + 1, clusters.len(), cluster.name, cluster.total_items());
+
+            let prompt = build_classify_prompt(cluster, report, sys_name);
+            let request = build_ollama_request(&prompt, model_name, ctx);
+
+            let start = std::time::Instant::now();
+            let response = client.post(format!("{}/api/generate", base_url))
+                .json(&request)
+                .send()
+                .map_err(|e| {
+                    if e.is_connect() {
+                        crate::error::FdmlError::project_error(
+                            format!("Ollama not running at {}. Start with: ollama serve", base_url)
+                        )
+                    } else {
+                        crate::error::FdmlError::project_error(format!("Ollama error: {}", e))
+                    }
+                })?;
+
+            if !response.status().is_success() {
+                let body = response.text().unwrap_or_default();
+                eprintln!("  ⚠ Cluster {} failed: {}", cluster.name, body);
+                continue;
+            }
+
+            let json: serde_json::Value = response.json().map_err(|e| {
+                crate::error::FdmlError::project_error(format!("Parse error: {}", e))
+            })?;
+
+            let text = json.get("response").and_then(|r| r.as_str()).unwrap_or("");
+            let elapsed = start.elapsed();
+            let eval_count = json.get("eval_count").and_then(|v| v.as_u64()).unwrap_or(0);
+
+            match parse_classification(text) {
+                Ok(result) => {
+                    let domain_count = result.entities.iter().filter(|e| e.role == "domain_entity").count();
+                    let biz_count = result.actions.iter().filter(|a| a.role == "business_action").count();
+                    eprintln!("  ✓ {} entities ({} domain), {} actions ({} business) in {:.1}s ({} tok/s)",
+                        result.entities.len(), domain_count,
+                        result.actions.len(), biz_count,
+                        elapsed.as_secs_f64(),
+                        eval_count as f64 / elapsed.as_secs_f64().max(0.1) as f64);
+
+                    for ec in result.entities {
+                        all_entity_class.push((ec.id, ec.role, ec.description));
+                    }
+                    for ac in result.actions {
+                        all_action_class.push((ac.id, ac.role, ac.description));
+                    }
+                }
+                Err(e) => {
+                    eprintln!("  ⚠ Parse failed for cluster '{}': {}", cluster.name, e);
+                    // Fallback: treat all as domain/business
+                    for eid in &cluster.entity_ids {
+                        all_entity_class.push((eid.clone(), "domain_entity".to_string(), String::new()));
+                    }
+                    for aid in &cluster.action_ids {
+                        all_action_class.push((aid.clone(), "business_action".to_string(), String::new()));
+                    }
+                }
+            }
+        }
+
+        // Step 3: Build spec from classifications + scanner data
+        eprintln!("  ℹ Assembling FDML spec from classifications...");
+        let spec = crate::linker::assemble::assemble_from_classifications(report, scan, &all_entity_class, &all_action_class);
+
+        Ok(spec)
     }
 
     /// Call LLM — provider selection: "cli", "api", "ollama", or None = auto

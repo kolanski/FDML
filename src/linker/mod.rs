@@ -1,6 +1,8 @@
 pub mod types;
 pub mod platform;
 pub mod assemble;
+pub mod cluster;
+pub mod llm_classify;
 
 use std::collections::HashMap;
 use std::path::Path;
