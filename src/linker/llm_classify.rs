@@ -220,7 +220,35 @@ pub fn scenario_schema() -> serde_json::Value {
     })
 }
 
-/// Build a prompt for BDD scenario generation
+/// Parsed BDD scenario result from LLM
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ScenarioResult {
+    #[serde(default)]
+    pub features: Vec<FeatureScenarios>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct FeatureScenarios {
+    pub feature_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub scenarios: Vec<BddScenario>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct BddScenario {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub given: Vec<String>,
+    #[serde(default)]
+    pub when: Vec<String>,
+    #[serde(default)]
+    pub then: Vec<String>,
+}
+
+/// Build a prompt for BDD scenario generation.
+/// Batches up to 10 actions per prompt to stay under 4K tokens.
 pub fn build_scenario_prompt(
     domain_entities: &[(String, String)],  // (id, description)
     business_actions: &[(String, String)],  // (id, description)
@@ -229,21 +257,60 @@ pub fn build_scenario_prompt(
     let mut prompt = String::new();
 
     prompt.push_str(&format!(
-        "Generate BDD scenarios for '{}'. 2 scenarios per action.\n\n",
+        "Generate BDD test scenarios for '{}'. Group related actions into features. 1-2 scenarios per feature.\n\n",
         system_name
     ));
 
     prompt.push_str("Domain entities:\n");
-    for (id, desc) in domain_entities.iter().take(15) {
-        prompt.push_str(&format!("- {}: {}\n", id, desc));
+    for (id, desc) in domain_entities.iter().take(10) {
+        let d = if desc.is_empty() { id.as_str() } else { desc.as_str() };
+        prompt.push_str(&format!("- {}: {}\n", id, d));
     }
 
     prompt.push_str("\nBusiness actions:\n");
-    for (id, desc) in business_actions.iter().take(15) {
-        prompt.push_str(&format!("- {}: {}\n", id, desc));
+    for (id, desc) in business_actions.iter().take(10) {
+        let d = if desc.is_empty() { id.as_str() } else { desc.as_str() };
+        prompt.push_str(&format!("- {}: {}\n", id, d));
     }
 
-    prompt.push_str("\nGenerate features grouping related actions, with Given/When/Then scenarios.\n");
+    prompt.push_str("\nRules:\n");
+    prompt.push_str("- feature_id must be snake_case\n");
+    prompt.push_str("- scenario id must be snake_case\n");
+    prompt.push_str("- given/when/then are arrays of strings\n");
+    prompt.push_str("- Be specific: use entity names and concrete values\n");
 
     prompt
+}
+
+/// Build Ollama request for scenario generation with JSON Schema
+pub fn build_scenario_request(
+    prompt: &str,
+    model: &str,
+    num_ctx: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "prompt": prompt,
+        "stream": false,
+        "format": scenario_schema(),
+        "options": {
+            "num_ctx": num_ctx,
+            "temperature": 0.3
+        }
+    })
+}
+
+/// Parse scenario response
+pub fn parse_scenarios(response: &str) -> Result<ScenarioResult, String> {
+    let cleaned = response.trim();
+    let json_str = if cleaned.starts_with("```") {
+        let start = cleaned.find('\n').unwrap_or(0) + 1;
+        let end = cleaned.rfind("```").unwrap_or(cleaned.len());
+        &cleaned[start..end]
+    } else {
+        cleaned
+    };
+
+    serde_json::from_str::<ScenarioResult>(json_str.trim())
+        .map_err(|e| format!("Failed to parse scenarios: {}. Response: {}...", e, &response[..response.len().min(200)]))
 }

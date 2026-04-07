@@ -1618,9 +1618,71 @@ impl CommandRunner {
             }
         }
 
-        // Step 3: Build spec from classifications + scanner data
-        eprintln!("  ℹ Assembling FDML spec from classifications...");
-        let spec = crate::linker::assemble::assemble_from_classifications(report, scan, &all_entity_class, &all_action_class);
+        // Step 3: Generate BDD scenarios via LLM
+        let domain_entities: Vec<(String, String)> = all_entity_class.iter()
+            .filter(|(_, role, _)| role == "domain_entity")
+            .map(|(id, _, desc)| (id.clone(), desc.clone()))
+            .collect();
+        let business_actions: Vec<(String, String)> = all_action_class.iter()
+            .filter(|(_, role, _)| role == "business_action")
+            .map(|(id, _, desc)| (id.clone(), desc.clone()))
+            .collect();
+
+        let mut all_scenarios: Vec<crate::linker::llm_classify::FeatureScenarios> = Vec::new();
+
+        if !business_actions.is_empty() {
+            // Batch actions into groups of 10
+            let batch_size = 10;
+            let action_batches: Vec<&[(String, String)]> = business_actions.chunks(batch_size).collect();
+            let total_batches = action_batches.len();
+
+            for (i, batch) in action_batches.iter().enumerate() {
+                eprintln!("  [{}/{}] Generating BDD scenarios (batch {}/{})...",
+                    clusters.len() + i + 1, clusters.len() + total_batches,
+                    i + 1, total_batches);
+
+                let prompt = build_scenario_prompt(&domain_entities, batch, sys_name);
+                let request = build_scenario_request(&prompt, model_name, ctx);
+
+                let start = std::time::Instant::now();
+                match client.post(format!("{}/api/generate", base_url))
+                    .json(&request)
+                    .send()
+                {
+                    Ok(response) if response.status().is_success() => {
+                        if let Ok(json) = response.json::<serde_json::Value>() {
+                            let text = json.get("response").and_then(|r| r.as_str()).unwrap_or("");
+                            let elapsed = start.elapsed();
+                            match parse_scenarios(text) {
+                                Ok(result) => {
+                                    let scenario_count: usize = result.features.iter()
+                                        .map(|f| f.scenarios.len())
+                                        .sum();
+                                    eprintln!("  ✓ {} features, {} scenarios in {:.1}s",
+                                        result.features.len(), scenario_count, elapsed.as_secs_f64());
+                                    all_scenarios.extend(result.features);
+                                }
+                                Err(e) => {
+                                    eprintln!("  ⚠ Scenario parse failed: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    Ok(response) => {
+                        eprintln!("  ⚠ Scenario generation failed: {}", response.status());
+                    }
+                    Err(e) => {
+                        eprintln!("  ⚠ Scenario request failed: {}", e);
+                    }
+                }
+            }
+        }
+
+        // Step 4: Build spec from classifications + scenarios + scanner data
+        eprintln!("  ℹ Assembling FDML spec ({} entities, {} actions, {} scenario groups)...",
+            domain_entities.len(), business_actions.len(), all_scenarios.len());
+        let spec = crate::linker::assemble::assemble_from_classifications_with_scenarios(
+            report, scan, &all_entity_class, &all_action_class, &all_scenarios);
 
         Ok(spec)
     }

@@ -393,6 +393,137 @@ pub fn assemble_from_classifications(
     yaml
 }
 
+/// Build FDML spec with LLM-generated scenarios (replaces placeholder features)
+pub fn assemble_from_classifications_with_scenarios(
+    report: &LinkReport,
+    scan: &ScanResult,
+    entity_classifications: &[(String, String, String)],
+    action_classifications: &[(String, String, String)],
+    llm_scenarios: &[super::llm_classify::FeatureScenarios],
+) -> String {
+    // Start with the base assembly
+    let base = assemble_from_classifications(report, scan, entity_classifications, action_classifications);
+
+    if llm_scenarios.is_empty() {
+        return base;
+    }
+
+    // Replace placeholder features section with LLM-generated scenarios
+    // Find and replace the features block
+    if let Some(features_start) = base.find("\nfeatures:\n") {
+        let before_features = &base[..features_start + 1];
+
+        // Find where features section ends (next top-level key or end)
+        let after_features_content = &base[features_start + 1..];
+        let features_end = find_next_top_level_key(after_features_content)
+            .map(|pos| features_start + 1 + pos)
+            .unwrap_or(base.len());
+
+        let after_features = &base[features_end..];
+
+        let mut result = String::from(before_features);
+
+        // Write LLM-generated features
+        result.push_str("features:\n");
+        for feat in llm_scenarios {
+            result.push_str(&format!("  - id: {}\n", feat.feature_id));
+            result.push_str(&format!("    title: \"{}\"\n", feat.title.replace('"', "'")));
+            result.push_str("    scenarios:\n");
+            for scenario in &feat.scenarios {
+                result.push_str(&format!("      - id: {}\n", scenario.id));
+                result.push_str(&format!("        title: \"{}\"\n", scenario.title.replace('"', "'")));
+                if !scenario.given.is_empty() {
+                    result.push_str("        given:\n");
+                    for g in &scenario.given {
+                        result.push_str(&format!("          - \"{}\"\n", g.replace('"', "'")));
+                    }
+                }
+                if !scenario.when.is_empty() {
+                    result.push_str("        when:\n");
+                    for w in &scenario.when {
+                        result.push_str(&format!("          - \"{}\"\n", w.replace('"', "'")));
+                    }
+                }
+                if !scenario.then.is_empty() {
+                    result.push_str("        then:\n");
+                    for t in &scenario.then {
+                        result.push_str(&format!("          - \"{}\"\n", t.replace('"', "'")));
+                    }
+                }
+            }
+            result.push_str("\n");
+        }
+
+        // Also keep original features that weren't replaced by LLM
+        let llm_feature_ids: Vec<&str> = llm_scenarios.iter().map(|f| f.feature_id.as_str()).collect();
+        for feat in &report.features {
+            if !llm_feature_ids.contains(&feat.feature_id.as_str()) {
+                result.push_str(&format!("  - id: {}\n", feat.feature_id));
+                result.push_str(&format!("    title: \"{}\"\n", feat.title));
+                result.push_str("    scenarios:\n");
+                result.push_str(&format!("      - id: {}_basic\n", feat.feature_id));
+                result.push_str(&format!("        title: \"Basic {} operation\"\n", feat.title));
+                result.push_str("        given:\n");
+                result.push_str("          - \"System is initialized\"\n");
+                result.push_str("        when:\n");
+                result.push_str(&format!("          - \"{} is invoked\"\n", feat.title));
+                result.push_str("        then:\n");
+                result.push_str("          - \"Expected result is produced\"\n\n");
+            }
+        }
+
+        result.push_str(after_features);
+        result
+    } else {
+        // No features section found, append LLM scenarios
+        let mut result = base;
+        result.push_str("features:\n");
+        for feat in llm_scenarios {
+            result.push_str(&format!("  - id: {}\n", feat.feature_id));
+            result.push_str(&format!("    title: \"{}\"\n", feat.title.replace('"', "'")));
+            result.push_str("    scenarios:\n");
+            for scenario in &feat.scenarios {
+                result.push_str(&format!("      - id: {}\n", scenario.id));
+                result.push_str(&format!("        title: \"{}\"\n", scenario.title.replace('"', "'")));
+                result.push_str("        given:\n");
+                for g in &scenario.given {
+                    result.push_str(&format!("          - \"{}\"\n", g.replace('"', "'")));
+                }
+                result.push_str("        when:\n");
+                for w in &scenario.when {
+                    result.push_str(&format!("          - \"{}\"\n", w.replace('"', "'")));
+                }
+                result.push_str("        then:\n");
+                for t in &scenario.then {
+                    result.push_str(&format!("          - \"{}\"\n", t.replace('"', "'")));
+                }
+            }
+            result.push_str("\n");
+        }
+        result
+    }
+}
+
+/// Find position of the next top-level YAML key (not indented)
+fn find_next_top_level_key(yaml: &str) -> Option<usize> {
+    // Skip the first line (which is "features:")
+    let mut pos = 0;
+    let mut first_line = true;
+    for line in yaml.lines() {
+        if first_line {
+            pos += line.len() + 1;
+            first_line = false;
+            continue;
+        }
+        // Top-level key: starts with a letter (not space/dash)
+        if !line.is_empty() && !line.starts_with(' ') && !line.starts_with('-') && !line.starts_with('#') {
+            return Some(pos);
+        }
+        pos += line.len() + 1;
+    }
+    None
+}
+
 /// Map code types to FDML types
 fn map_field_type(code_type: &str) -> &str {
     let lower = code_type.to_lowercase();
