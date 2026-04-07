@@ -1369,12 +1369,22 @@ impl CommandRunner {
 
                     // If --llm: send each system through LLM to get per-system FDML spec
                     if llm {
-                        let prompt_kb = sys_prompt.len() / 1024;
+                        let is_ollama = provider.as_deref() == Some("ollama")
+                            || (provider.is_none() && Self::is_ollama_running(ollama_url.as_deref()));
                         let sys_idx = detected.iter().position(|s| s.id == sys.id).unwrap_or(0) + 1;
-                        print_info(&format!("    [{}/{}] Sending {}KB prompt to LLM for {}...",
-                            sys_idx, detected.len(), prompt_kb, sys.name));
                         let llm_start = std::time::Instant::now();
-                        match self.call_llm(&sys_prompt, fast, model.as_deref(), provider.as_deref(), ollama_url.as_deref(), num_ctx) {
+
+                        let llm_result = if is_ollama {
+                            print_info(&format!("    [{}/{}] Hybrid pipeline for {}...",
+                                sys_idx, detected.len(), sys.name));
+                            self.call_llm_hybrid(&report, &scan, model.as_deref(), ollama_url.as_deref(), num_ctx)
+                        } else {
+                            let prompt_kb = sys_prompt.len() / 1024;
+                            print_info(&format!("    [{}/{}] Sending {}KB prompt to LLM for {}...",
+                                sys_idx, detected.len(), prompt_kb, sys.name));
+                            self.call_llm(&sys_prompt, fast, model.as_deref(), provider.as_deref(), ollama_url.as_deref(), num_ctx)
+                        };
+                        match llm_result {
                             Ok(spec) => {
                                 let elapsed = llm_start.elapsed().as_secs();
                                 let spec_lines = spec.lines().count();
@@ -1519,7 +1529,7 @@ impl CommandRunner {
         Ok(())
     }
 
-    /// Hybrid pipeline: cluster → LLM classify → deterministic assembly
+    /// Hybrid pipeline: cluster → LLM classify → BDD scenarios → deterministic assembly
     fn call_llm_hybrid(
         &self,
         report: &crate::linker::types::LinkReport,
@@ -1528,6 +1538,9 @@ impl CommandRunner {
         ollama_url: Option<&str>,
         num_ctx: Option<usize>,
     ) -> Result<String> {
+        // Note: Ollama processes one request at a time (single GPU), so
+        // parallelizing within one system doesn't help. Parallelism is
+        // applied at the system level in scan-platform instead.
         use crate::linker::cluster::cluster_by_module;
         use crate::linker::llm_classify::*;
 
