@@ -245,6 +245,10 @@ pub enum Commands {
         #[arg(long)]
         llm: bool,
 
+        /// Skip BDD scenario generation (faster)
+        #[arg(long)]
+        skip_scenarios: bool,
+
         /// Use fast model (haiku) for quick drafts
         #[arg(long)]
         fast: bool,

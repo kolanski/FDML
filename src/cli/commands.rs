@@ -39,8 +39,8 @@ impl CommandRunner {
             Commands::LinkCode { code, fdml, output, format, llm, no_llm, skip_scenarios, fast, model, provider, ollama_url, num_ctx, chunk_strategy } => {
                 self.run_link_code(code, fdml, output, format, llm, no_llm, skip_scenarios, fast, model, provider, ollama_url, num_ctx, chunk_strategy)
             },
-            Commands::ScanPlatform { input, output, format, exclude, llm, fast, model, provider, ollama_url, num_ctx, chunk_strategy } => {
-                self.run_scan_platform(input, output, format, exclude, llm, fast, model, provider, ollama_url, num_ctx, chunk_strategy)
+            Commands::ScanPlatform { input, output, format, exclude, llm, skip_scenarios, fast, model, provider, ollama_url, num_ctx, chunk_strategy } => {
+                self.run_scan_platform(input, output, format, exclude, llm, skip_scenarios, fast, model, provider, ollama_url, num_ctx, chunk_strategy)
             },
         }
     }
@@ -1288,6 +1288,7 @@ impl CommandRunner {
         format: String,
         exclude: Vec<String>,
         llm: bool,
+        skip_scenarios: bool,
         fast: bool,
         model: Option<String>,
         provider: Option<String>,
@@ -1378,7 +1379,7 @@ impl CommandRunner {
                         let llm_result = if is_ollama {
                             print_info(&format!("    [{}/{}] Hybrid pipeline for {}...",
                                 sys_idx, detected.len(), sys.name));
-                            self.call_llm_hybrid(&report, &scan, model.as_deref(), ollama_url.as_deref(), num_ctx, false)
+                            self.call_llm_hybrid(&report, &scan, model.as_deref(), ollama_url.as_deref(), num_ctx, skip_scenarios)
                         } else {
                             let prompt_kb = sys_prompt.len() / 1024;
                             print_info(&format!("    [{}/{}] Sending {}KB prompt to LLM for {}...",
