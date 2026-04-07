@@ -36,8 +36,8 @@ impl CommandRunner {
             Commands::ParseCode { input, output, format, exclude } => {
                 self.run_parse_code(input, output, format, exclude)
             },
-            Commands::LinkCode { code, fdml, output, format, llm, no_llm, fast, model, provider, ollama_url, num_ctx, chunk_strategy } => {
-                self.run_link_code(code, fdml, output, format, llm, no_llm, fast, model, provider, ollama_url, num_ctx, chunk_strategy)
+            Commands::LinkCode { code, fdml, output, format, llm, no_llm, skip_scenarios, fast, model, provider, ollama_url, num_ctx, chunk_strategy } => {
+                self.run_link_code(code, fdml, output, format, llm, no_llm, skip_scenarios, fast, model, provider, ollama_url, num_ctx, chunk_strategy)
             },
             Commands::ScanPlatform { input, output, format, exclude, llm, fast, model, provider, ollama_url, num_ctx, chunk_strategy } => {
                 self.run_scan_platform(input, output, format, exclude, llm, fast, model, provider, ollama_url, num_ctx, chunk_strategy)
@@ -1127,6 +1127,7 @@ impl CommandRunner {
         format: String,
         llm: bool,
         no_llm: bool,
+        skip_scenarios: bool,
         fast: bool,
         model: Option<String>,
         provider: Option<String>,
@@ -1178,7 +1179,7 @@ impl CommandRunner {
                 || (provider.is_none() && Self::is_ollama_running(ollama_url.as_deref()));
             let llm_result = if is_ollama {
                 eprintln!("  ℹ Using hybrid pipeline (cluster → classify → assemble)");
-                self.call_llm_hybrid(&report, &scan, model.as_deref(), ollama_url.as_deref(), num_ctx)?
+                self.call_llm_hybrid(&report, &scan, model.as_deref(), ollama_url.as_deref(), num_ctx, skip_scenarios)?
             } else {
                 self.call_llm(&metaprompt, fast, model.as_deref(), provider.as_deref(), ollama_url.as_deref(), num_ctx)?
             };
@@ -1377,7 +1378,7 @@ impl CommandRunner {
                         let llm_result = if is_ollama {
                             print_info(&format!("    [{}/{}] Hybrid pipeline for {}...",
                                 sys_idx, detected.len(), sys.name));
-                            self.call_llm_hybrid(&report, &scan, model.as_deref(), ollama_url.as_deref(), num_ctx)
+                            self.call_llm_hybrid(&report, &scan, model.as_deref(), ollama_url.as_deref(), num_ctx, false)
                         } else {
                             let prompt_kb = sys_prompt.len() / 1024;
                             print_info(&format!("    [{}/{}] Sending {}KB prompt to LLM for {}...",
@@ -1537,6 +1538,7 @@ impl CommandRunner {
         model: Option<&str>,
         ollama_url: Option<&str>,
         num_ctx: Option<usize>,
+        skip_scenarios: bool,
     ) -> Result<String> {
         // Note: Ollama processes one request at a time (single GPU), so
         // parallelizing within one system doesn't help. Parallelism is
@@ -1643,7 +1645,7 @@ impl CommandRunner {
 
         let mut all_scenarios: Vec<crate::linker::llm_classify::FeatureScenarios> = Vec::new();
 
-        if !business_actions.is_empty() {
+        if !business_actions.is_empty() && !skip_scenarios {
             // Batch actions into groups of 10
             let batch_size = 10;
             let action_batches: Vec<&[(String, String)]> = business_actions.chunks(batch_size).collect();
