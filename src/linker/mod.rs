@@ -3,6 +3,7 @@ pub mod platform;
 pub mod assemble;
 pub mod cluster;
 pub mod llm_classify;
+pub mod flows;
 
 use std::collections::HashMap;
 use std::path::Path;

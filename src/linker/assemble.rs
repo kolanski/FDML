@@ -179,6 +179,12 @@ pub fn assemble_spec_no_llm(
         }
     }
 
+    // ─── Flows (auto-discovered via BFS) ───
+    let flows = super::flows::discover_flows(report, scan);
+    if !flows.is_empty() {
+        yaml.push_str(&super::flows::flows_to_yaml(&flows));
+    }
+
     // ─── Traceability ───
     let mut has_trace = false;
     let mut trace = String::new();
@@ -361,6 +367,12 @@ pub fn assemble_from_classifications(
             yaml.push_str("        then:\n");
             yaml.push_str("          - \"Expected result is produced\"\n\n");
         }
+    }
+
+    // Flows (auto-discovered)
+    let flows = super::flows::discover_flows(report, scan);
+    if !flows.is_empty() {
+        yaml.push_str(&super::flows::flows_to_yaml(&flows));
     }
 
     // Traceability
