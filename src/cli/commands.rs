@@ -858,9 +858,15 @@ impl CommandRunner {
         }
 
         // Second pass: LLM calls — parallel or sequential
+        // LPT scheduling: sort jobs by prompt size DESC so the biggest one starts first
+        // and runs in parallel with the smaller ones. Otherwise a late-arriving giant
+        // (e.g. R3 core was 8th in detection order) blocks wall-clock time.
+        needs_llm.sort_by(|a, b| b.prompt.len().cmp(&a.prompt.len()));
         if !needs_llm.is_empty() {
             let llm_count = needs_llm.len();
-            log(format!("{} system(s) need LLM generation", llm_count));
+            let biggest_kb = needs_llm[0].prompt.len() / 1024;
+            log(format!("{} system(s) need LLM generation (sorted by size DESC; biggest: {} @ {}KB)",
+                llm_count, needs_llm[0].sys.name, biggest_kb));
             set_status("generating", 0.2, &format!("Generating {} specs...", llm_count));
 
             // Use scoped threads for parallel LLM calls
@@ -1727,6 +1733,15 @@ impl CommandRunner {
                 eprintln!("  ℹ Provider forced: Ollama");
                 self.call_ollama(prompt, model, num_ctx, ollama_url)
             }
+            Some("hf") => {
+                let token = std::env::var("HF_TOKEN").map_err(|_| {
+                    crate::error::FdmlError::project_error(
+                        "HF_TOKEN not set. Export your Hugging Face token: export HF_TOKEN=hf_...".to_string()
+                    )
+                })?;
+                eprintln!("  ℹ Provider forced: Hugging Face Router");
+                self.call_hf_router(&token, prompt, model)
+            }
             _ => {
                 // Auto-detect: API key → Ollama → CLI
                 if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
@@ -1856,6 +1871,89 @@ impl CommandRunner {
         Ok(Self::strip_yaml_fences(text))
     }
 
+    /// Call Hugging Face Inference Router (OpenAI-compatible chat completions).
+    /// Default model: meta-llama/Llama-3.3-70B-Instruct:cerebras (≈1500–2000 tok/s).
+    /// Other fast variants: ":groq", ":sambanova", ":together", ":fireworks-ai".
+    /// Override via --model. Requires env HF_TOKEN.
+    fn call_hf_router(&self, token: &str, prompt: &str, model: Option<&str>) -> Result<String> {
+        // Default: gpt-oss-120b via Cerebras — benchmarked ~1179 tok/s end-to-end on 2K-token outputs.
+        // Alt: "meta-llama/Llama-3.3-70B-Instruct:groq" (~380 tok/s), ":sambanova", ":together".
+        let model_name = model.unwrap_or("openai/gpt-oss-120b:cerebras").to_string();
+
+        eprintln!("  ℹ Model: {}", model_name);
+        eprintln!("  ℹ Endpoint: https://router.huggingface.co/v1/chat/completions");
+
+        let system_msg = "You are an FDML specification generator. Output ONLY valid YAML — no markdown fences, no explanations. Start directly with YAML content. Every entity MUST have a fields array (use `fields: []` if none). Every scenario MUST have exactly one `when:` key.";
+
+        let prompt_tokens_est = prompt.len() / 4;
+        eprintln!("  ℹ Sending request (~{}K tokens)...", prompt_tokens_est / 1000);
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(600))
+            .build()
+            .map_err(|e| crate::error::FdmlError::project_error(format!("HTTP client error: {}", e)))?;
+
+        let request = serde_json::json!({
+            "model": model_name,
+            "max_tokens": 16384,
+            "temperature": 0.1,
+            "stream": false,
+            "messages": [
+                {"role": "system", "content": system_msg},
+                {"role": "user",   "content": prompt},
+            ]
+        });
+
+        let start = std::time::Instant::now();
+
+        let response = client
+            .post("https://router.huggingface.co/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .map_err(|e| crate::error::FdmlError::project_error(format!("HF request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(crate::error::FdmlError::project_error(
+                format!("HF Router error ({}): {}", status, body)
+            ));
+        }
+
+        let json: serde_json::Value = response.json().map_err(|e| {
+            crate::error::FdmlError::project_error(format!("Bad HF response: {}", e))
+        })?;
+
+        if let Some(error) = json.get("error") {
+            return Err(crate::error::FdmlError::project_error(
+                format!("HF error: {}", error)
+            ));
+        }
+
+        let text = json.get("choices")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|first| first.get("message"))
+            .and_then(|msg| msg.get("content"))
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| crate::error::FdmlError::project_error(
+                format!("No text in HF response: {}", json)
+            ))?;
+
+        let elapsed = start.elapsed();
+        let usage = json.get("usage");
+        let prompt_t = usage.and_then(|u| u.get("prompt_tokens")).and_then(|v| v.as_u64()).unwrap_or(0);
+        let completion_t = usage.and_then(|u| u.get("completion_tokens")).and_then(|v| v.as_u64()).unwrap_or(0);
+        eprintln!("  ℹ Tokens: {} in, {} out in {:.1}s ({:.0} out tok/s)",
+            prompt_t, completion_t, elapsed.as_secs_f64(),
+            completion_t as f64 / elapsed.as_secs_f64().max(0.001));
+
+        print_success("LLM response received (HF Router)");
+        Ok(Self::strip_yaml_fences(text))
+    }
+
     /// Call Anthropic API directly via curl (requires ANTHROPIC_API_KEY)
     fn call_anthropic_api(&self, api_key: &str, prompt: &str, fast: bool, model: Option<&str>) -> Result<String> {
         use std::process::Command;
@@ -1955,33 +2053,49 @@ impl CommandRunner {
         eprintln!("  ℹ Provider: claude CLI");
         eprintln!("  ℹ Model: {}", model_name);
 
-        // Write prompt to temp file for piping via stdin
-        let tmp_prompt = std::env::temp_dir().join(format!("fdml_link_prompt_{:?}.md", std::thread::current().id()));
+        // Write prompt to temp file (shell-safe filename: numeric pid + nanos, no parens)
+        let unique = format!(
+            "{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let tmp_prompt = std::env::temp_dir().join(format!("fdml_link_prompt_{}.md", unique));
         fs::write(&tmp_prompt, prompt).map_err(|e| {
             crate::error::FdmlError::project_error(format!("Failed to write prompt: {}", e))
         })?;
 
         let system_prompt = "You are an FDML specification generator. Output ONLY valid YAML — no markdown fences, no explanations. Start directly with YAML content.";
 
-        eprintln!("  ℹ Running: cat prompt | claude -p ... --max-turns 1 --output-format text");
+        eprintln!("  ℹ Running: claude -p ... --max-turns 1 --output-format text (prompt via stdin)");
 
-        // cat file | claude -p "query" --model X --output-format text --max-turns 1 --no-session-persistence
-        let shell_cmd = format!(
-            "cat {} | claude -p \"Generate a complete FDML YAML specification from this analysis\" \
-             --model {} \
-             --system-prompt \"{}\" \
-             --output-format text \
-             --max-turns 1 \
-             --no-session-persistence",
-            tmp_prompt.display(),
-            model_name,
-            system_prompt.replace('"', "\\\""),
-        );
-
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&shell_cmd)
-            .output()
+        // Invoke claude directly with stdin (no shell, no quoting issues)
+        use std::io::Write;
+        use std::process::Stdio;
+        let prompt_bytes = fs::read(&tmp_prompt).map_err(|e| {
+            crate::error::FdmlError::project_error(format!("Failed to read prompt back: {}", e))
+        })?;
+        let mut child = Command::new("claude")
+            .arg("-p")
+            .arg("Generate a complete FDML YAML specification from this analysis")
+            .arg("--model").arg(&model_name)
+            .arg("--system-prompt").arg(system_prompt)
+            .arg("--output-format").arg("text")
+            .arg("--max-turns").arg("1")
+            .arg("--no-session-persistence")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| crate::error::FdmlError::project_error(format!("Failed to spawn claude: {}", e)))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(&prompt_bytes).map_err(|e| {
+                crate::error::FdmlError::project_error(format!("Failed to write to claude stdin: {}", e))
+            })?;
+        }
+        let output = child.wait_with_output()
             .map_err(|e| {
                 crate::error::FdmlError::project_error(format!("claude CLI failed to start: {}", e))
             })?;
@@ -2011,6 +2125,7 @@ impl CommandRunner {
     /// Strip markdown YAML fences from LLM output
     fn strip_yaml_fences(text: &str) -> String {
         let cleaned = text.trim();
+        // Strip opening ```yaml / ```yml / ``` if present
         let cleaned = if cleaned.starts_with("```yaml") || cleaned.starts_with("```yml") {
             let start = cleaned.find('\n').unwrap_or(0) + 1;
             let end = cleaned.rfind("```").unwrap_or(cleaned.len());
@@ -2019,6 +2134,14 @@ impl CommandRunner {
             let start = cleaned.find('\n').unwrap_or(0) + 1;
             let end = cleaned.rfind("```").unwrap_or(cleaned.len());
             &cleaned[start..end]
+        } else {
+            cleaned
+        };
+        // Also strip a trailing ``` even when opening fence was absent
+        // (some LLMs output bare YAML followed by a stray closing fence).
+        let cleaned = cleaned.trim_end();
+        let cleaned = if cleaned.ends_with("```") {
+            &cleaned[..cleaned.len() - 3]
         } else {
             cleaned
         };

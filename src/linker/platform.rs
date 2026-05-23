@@ -69,6 +69,24 @@ pub fn detect_systems(root: &Path, exclude: &[String]) -> Vec<DetectedSystem> {
 
         if let Some(system) = detect_system_in_dir(&path, &dir_name, root) {
             systems.push(system);
+        } else if is_container_dir(&dir_name) {
+            // Recurse one level into common container dirs (src/, apps/, services/, packages/, projects/)
+            if let Ok(inner_entries) = std::fs::read_dir(&path) {
+                for inner in inner_entries.flatten() {
+                    let inner_path = inner.path();
+                    if !inner_path.is_dir() { continue; }
+                    let inner_name = match inner_path.file_name().and_then(|n| n.to_str()) {
+                        Some(n) => n.to_string(),
+                        None => continue,
+                    };
+                    if exclude.contains(&inner_name) || is_infrastructure_dir(&inner_name) {
+                        continue;
+                    }
+                    if let Some(system) = detect_system_in_dir(&inner_path, &inner_name, root) {
+                        systems.push(system);
+                    }
+                }
+            }
         }
     }
 
@@ -97,6 +115,11 @@ pub fn detect_systems(root: &Path, exclude: &[String]) -> Vec<DetectedSystem> {
     }
 
     systems
+}
+
+/// Container directories that hold multiple system subdirectories (monorepo layouts)
+fn is_container_dir(name: &str) -> bool {
+    matches!(name, "src" | "apps" | "services" | "packages" | "projects" | "modules" | "components")
 }
 
 fn is_infrastructure_dir(name: &str) -> bool {
@@ -179,6 +202,46 @@ fn detect_boundary(dir: &Path) -> Option<(String, String, String)> {
         return Some(("service".to_string(), "Go".to_string(), "go.mod".to_string()));
     }
 
+    // .NET — *.csproj / *.fsproj / *.vbproj (first one found)
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                if name.ends_with(".csproj") {
+                    let (sys_type, tech) = classify_csproj(&p);
+                    return Some((sys_type, tech, name.to_string()));
+                }
+                if name.ends_with(".fsproj") {
+                    return Some(("service".to_string(), "F# (.NET)".to_string(), name.to_string()));
+                }
+                if name.ends_with(".vbproj") {
+                    return Some(("service".to_string(), "VB.NET".to_string(), name.to_string()));
+                }
+            }
+        }
+    }
+
+    // Java/Kotlin — pom.xml / build.gradle / build.gradle.kts
+    if dir.join("pom.xml").exists() {
+        return Some(("service".to_string(), "Java (Maven)".to_string(), "pom.xml".to_string()));
+    }
+    if dir.join("build.gradle").exists() {
+        return Some(("service".to_string(), "Java (Gradle)".to_string(), "build.gradle".to_string()));
+    }
+    if dir.join("build.gradle.kts").exists() {
+        return Some(("service".to_string(), "Kotlin (Gradle)".to_string(), "build.gradle.kts".to_string()));
+    }
+
+    // Ruby — Gemfile
+    if dir.join("Gemfile").exists() {
+        return Some(("service".to_string(), "Ruby".to_string(), "Gemfile".to_string()));
+    }
+
+    // PHP — composer.json
+    if dir.join("composer.json").exists() {
+        return Some(("service".to_string(), "PHP".to_string(), "composer.json".to_string()));
+    }
+
     // Dockerfile (fallback)
     let dockerfile = dir.join("Dockerfile");
     if dockerfile.exists() {
@@ -186,6 +249,28 @@ fn detect_boundary(dir: &Path) -> Option<(String, String, String)> {
     }
 
     None
+}
+
+/// Classify a .csproj — distinguish frontend-ish (Blazor/MAUI/WinUI/WPF/WinForms) from library/service
+fn classify_csproj(path: &std::path::Path) -> (String, String) {
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let lower = content.to_lowercase();
+    if lower.contains("microsoft.net.sdk.blazorwebassembly") || lower.contains("microsoft.net.sdk.razor") {
+        return ("frontend".to_string(), "Blazor (.NET)".to_string());
+    }
+    if lower.contains("usewpf") || lower.contains("<usewpf>true</usewpf>") {
+        return ("frontend".to_string(), "WPF (.NET)".to_string());
+    }
+    if lower.contains("usewindowsforms") {
+        return ("frontend".to_string(), "WinForms (.NET)".to_string());
+    }
+    if lower.contains("microsoft.maui") {
+        return ("frontend".to_string(), "MAUI (.NET)".to_string());
+    }
+    if lower.contains("microsoft.windowsappsdk") || lower.contains("winui") {
+        return ("frontend".to_string(), "WinUI 3 (.NET)".to_string());
+    }
+    ("service".to_string(), "C# (.NET)".to_string())
 }
 
 fn classify_package_json(content: &str) -> (String, String) {
