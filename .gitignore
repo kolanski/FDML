@@ -1,6 +1,6 @@
 *.fdml
 target/
-!examples/**/*.fdml
+!examples/studio/**/*.fdml
 
 # Rust build artifacts
 /target/
@@ -31,6 +31,8 @@ generated/
 output/
 dist/
 build/
+web/dist/
+*.prompt.md
 
 # Node.js (in case of JS tooling)
 node_modules/

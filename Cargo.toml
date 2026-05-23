@@ -1,6 +1,6 @@
 [package]
 name = "fdml"
-version = "0.2.0"
+version = "0.3.11"
 edition = "2021"
 description = "FDML (Feature-Driven Modeling Language) CLI tools"
 authors = ["FDML Contributors"]
@@ -14,14 +14,31 @@ name = "fdml"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.0", features = ["derive"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_yaml = "0.9"
-serde_json = "1.0"
-anyhow = "1.0"
-colored = "2.0"
-thiserror = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "=4.5.37", features = ["derive"] }
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_yaml = "=0.9.34"
+serde_json = "=1.0.140"
+anyhow = "=1.0.98"
+colored = "=2.2.0"
+thiserror = "=1.0.69"
+chrono = { version = "=0.4.41", features = ["serde"] }
+tree-sitter = "=0.22.6"
+tree-sitter-python = "=0.21.0"
+tree-sitter-java = "=0.21.0"
+tree-sitter-c-sharp = "=0.21.3"
+tree-sitter-javascript = "=0.21.4"
+tree-sitter-typescript = "=0.21.2"
+tree-sitter-go = "=0.21.2"
+axum = "=0.8.4"
+tokio = { version = "=1.45.1", features = ["full"] }
+tower-http = { version = "=0.6.6", features = ["cors"] }
+rust-embed = "=8.7.0"
+notify = "=7.0.0"
+notify-debouncer-mini = "=0.5.0"
+open = "=5.3.2"
+tokio-stream = { version = "=0.1.17", features = ["sync"] }
+mime_guess = "=2.0.5"
+reqwest = { version = "0.12", features = ["json", "blocking"] }
 
 [dev-dependencies]
 tempfile = "3.0"

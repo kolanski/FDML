@@ -19,6 +19,18 @@ pub struct FdmlDocument {
     pub traceability: Vec<Traceability>,
     #[serde(default)]
     pub generation_rules: Vec<GenerationRule>,
+
+    // --- FDML 1.4: Architectural Level ---
+    #[serde(default)]
+    pub contours: Vec<Contour>,
+    #[serde(default)]
+    pub systems: Vec<SystemEntry>,
+    #[serde(default)]
+    pub integrations: Vec<Integration>,
+    #[serde(default)]
+    pub cross_flows: Vec<CrossFlow>,
+    #[serde(default)]
+    pub shared_entities: Vec<SharedEntity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -179,6 +191,113 @@ pub enum Value {
     Object(HashMap<String, Value>),
 }
 
+// --- FDML 1.4: Contour ---
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Contour {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub trust_level: Option<String>,
+}
+
+// --- FDML 1.4: System Entry (plural systems array) ---
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SystemEntry {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(rename = "type")]
+    pub system_type: String,
+    pub technology: Option<String>,
+    pub contour: Option<String>,
+    pub spec: Option<String>,
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub components: Vec<String>,
+    #[serde(default)]
+    pub relationships: Vec<Relationship>,
+}
+
+// --- FDML 1.4: Integration ---
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Integration {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    #[serde(rename = "type")]
+    pub integration_type: String,
+    pub protocol: Option<String>,
+    pub description: Option<String>,
+    #[serde(rename = "async", default)]
+    pub is_async: bool,
+    #[serde(default)]
+    pub endpoints: Vec<IntegrationEndpoint>,
+    #[serde(default)]
+    pub channels: Vec<String>,
+    #[serde(default)]
+    pub data_entities: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IntegrationEndpoint {
+    pub method: String,
+    pub path: String,
+    pub description: Option<String>,
+}
+
+// --- FDML 1.4: Cross-Flow ---
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CrossFlow {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub trigger: Option<String>,
+    pub steps: Vec<CrossFlowStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CrossFlowStep {
+    pub id: String,
+    pub system: String,
+    pub action: Option<String>,
+    pub description: Option<String>,
+    pub integration: Option<String>,
+    pub on_success: Option<String>,
+    pub on_failure: Option<String>,
+}
+
+// --- FDML 1.4: Shared Entity ---
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SharedEntity {
+    #[serde(alias = "id")]
+    pub entity: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub canonical_system: Option<String>,
+    #[serde(default, alias = "mappings")]
+    pub contexts: Vec<SharedEntityContext>,
+    #[serde(default)]
+    pub fields: Vec<SharedEntityField>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SharedEntityField {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub field_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SharedEntityContext {
+    pub system: String,
+    #[serde(default, alias = "local_entity")]
+    pub entity_id: String,
+    pub role: Option<String>,
+    #[serde(default)]
+    pub fields: Vec<String>,
+    pub notes: Option<String>,
+}
+
 impl Default for FdmlDocument {
     fn default() -> Self {
         Self {
@@ -191,6 +310,11 @@ impl Default for FdmlDocument {
             constraints: Vec::new(),
             traceability: Vec::new(),
             generation_rules: Vec::new(),
+            contours: Vec::new(),
+            systems: Vec::new(),
+            integrations: Vec::new(),
+            cross_flows: Vec::new(),
+            shared_entities: Vec::new(),
         }
     }
 }

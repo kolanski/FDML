@@ -101,6 +101,178 @@ pub enum Commands {
         #[command(subcommand)]
         operation: TraceCommands,
     },
+
+    /// Scan existing source code and extract inventory (entities, actions, relationships)
+    #[command(name = "parse-code")]
+    ParseCode {
+        /// Path to the source code directory or file to scan
+        input: String,
+
+        /// Output file path (default: stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Output format (yaml, json)
+        #[arg(short, long, default_value = "yaml")]
+        format: String,
+
+        /// Directories to exclude from scanning (comma-separated)
+        #[arg(short, long, value_delimiter = ',')]
+        exclude: Vec<String>,
+    },
+
+    /// Launch interactive visual spec viewer in the browser
+    Serve {
+        /// Path to the .fdml file to visualize
+        file: String,
+
+        /// Port to serve on
+        #[arg(short, long, default_value = "3000")]
+        port: u16,
+
+        /// Don't auto-open the browser
+        #[arg(long)]
+        no_open: bool,
+
+        /// Generate FDML spec from a project directory (shows live progress, then switches to viewer)
+        #[arg(long)]
+        generate: Option<String>,
+
+        /// Use fast model (haiku) for generation
+        #[arg(long)]
+        fast: bool,
+
+        /// Specific model to use for generation
+        #[arg(long)]
+        model: Option<String>,
+
+        /// LLM provider: "cli", "api", or "ollama"
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// Number of parallel LLM calls for per-system generation (default: 1 = sequential)
+        #[arg(long, default_value = "1")]
+        parallel: usize,
+
+        /// Ollama base URL (default: http://localhost:11434)
+        #[arg(long)]
+        ollama_url: Option<String>,
+
+        /// Context window size for Ollama (default: auto-calculated from prompt size)
+        #[arg(long)]
+        num_ctx: Option<usize>,
+
+        /// Chunking strategy: "monolithic" (one big prompt) or "sectional" (split into sub-prompts)
+        #[arg(long)]
+        chunk_strategy: Option<String>,
+    },
+
+    /// Link code inventory to FDML spec — match classes→entities, methods→actions, modules→features
+    #[command(name = "link-code")]
+    LinkCode {
+        /// Path to code inventory file (from parse-code output)
+        #[arg(long)]
+        code: String,
+
+        /// Path to FDML spec file (can be empty/missing — generates draft)
+        #[arg(long)]
+        fdml: Option<String>,
+
+        /// Output file path (default: stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Output format (yaml, json, prompt)
+        #[arg(short, long, default_value = "yaml")]
+        format: String,
+
+        /// Send metaprompt to LLM via claude CLI and get FDML spec back
+        #[arg(long)]
+        llm: bool,
+
+        /// Generate spec instantly from code analysis without LLM (heuristic classification)
+        #[arg(long)]
+        no_llm: bool,
+
+        /// Skip BDD scenario generation (faster, uses placeholder scenarios)
+        #[arg(long)]
+        skip_scenarios: bool,
+
+        /// Use fast model (haiku) for quick drafts
+        #[arg(long)]
+        fast: bool,
+
+        /// Specific model to use with --llm (default: sonnet)
+        #[arg(long)]
+        model: Option<String>,
+
+        /// LLM provider: "cli", "api", or "ollama". Default: auto-detect
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// Ollama base URL (default: http://localhost:11434)
+        #[arg(long)]
+        ollama_url: Option<String>,
+
+        /// Context window size for Ollama (default: auto-calculated)
+        #[arg(long)]
+        num_ctx: Option<usize>,
+
+        /// Chunking strategy: "monolithic" or "sectional"
+        #[arg(long)]
+        chunk_strategy: Option<String>,
+    },
+
+    /// Scan a multi-system project and generate an FDML 1.4 platform spec
+    #[command(name = "scan-platform")]
+    ScanPlatform {
+        /// Root directory of the multi-system project
+        input: String,
+
+        /// Output file path (default: stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Output format (yaml, json, prompt)
+        #[arg(short, long, default_value = "yaml")]
+        format: String,
+
+        /// Directories to exclude from scanning (comma-separated)
+        #[arg(short, long, value_delimiter = ',')]
+        exclude: Vec<String>,
+
+        /// Send metaprompt to LLM and get FDML 1.4 spec back
+        #[arg(long)]
+        llm: bool,
+
+        /// Skip BDD scenario generation (faster)
+        #[arg(long)]
+        skip_scenarios: bool,
+
+        /// Use fast model (haiku) for quick drafts
+        #[arg(long)]
+        fast: bool,
+
+        /// Specific model to use with --llm
+        #[arg(long)]
+        model: Option<String>,
+
+        /// LLM provider: "cli", "api", or "ollama". Default: auto-detect
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// Ollama base URL (default: http://localhost:11434)
+        #[arg(long)]
+        ollama_url: Option<String>,
+
+        /// Context window size for Ollama (default: auto-calculated)
+        #[arg(long)]
+        num_ctx: Option<usize>,
+
+        /// Chunking strategy: "monolithic" or "sectional"
+        #[arg(long)]
+        chunk_strategy: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
