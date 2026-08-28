@@ -28,6 +28,8 @@ impl JavaScriptScanner {
             language: Language::JavaScript,
             elements,
             imports,
+            anchors: Vec::new(),
+            literals: Vec::new(),
         })
     }
 

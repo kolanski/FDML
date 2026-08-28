@@ -1,0 +1,9 @@
+[package]
+name = "fdml-enrich"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde_json = { workspace = true }
+# Tier-1 (--tier llm): blocking HTTP to a local Ollama, no tokio.
+ureq = { version = "2", features = ["json"] }

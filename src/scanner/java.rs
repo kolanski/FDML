@@ -28,6 +28,8 @@ impl JavaScanner {
             language: Language::Java,
             elements,
             imports,
+            anchors: Vec::new(),
+            literals: Vec::new(),
         })
     }
 

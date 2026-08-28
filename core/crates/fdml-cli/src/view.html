@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FDML map</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js"></script>
+<style>
+  :root { --bg:#f6f7f9; --panel:#ffffff; --ink:#1f2937; --dim:#6b7280; --line:#e5e7eb; --accent:#3b82f6; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; font:13px/1.45 -apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  #top { height:48px; display:flex; align-items:center; gap:8px; padding:0 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+  #crumbs { display:flex; align-items:center; gap:6px; font-weight:600; }
+  #crumbs .c { cursor:pointer; color:var(--accent); }
+  #crumbs .c:last-child { color:var(--ink); cursor:default; }
+  #crumbs .sep { color:var(--dim); font-weight:400; }
+  #mode { display:flex; margin-left:16px; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
+  #mode button { border:none; background:var(--panel); color:var(--dim); font-size:12px; font-weight:600; padding:6px 14px; cursor:pointer; }
+  #mode button.on { background:var(--accent); color:#fff; }
+  .tog { margin-left:auto; display:flex; gap:14px; align-items:center; color:var(--dim); }
+  .tog label { cursor:pointer; user-select:none; }
+  #search { font-size:12px; padding:5px 10px; border:1px solid var(--line); border-radius:6px; outline:none; width:180px; background:var(--bg); }
+  #wrap { display:flex; height:calc(100% - 48px); }
+  #stage { flex:1; position:relative; }
+  #cy { position:absolute; inset:0; background:var(--bg); }
+  #board { position:absolute; inset:0; overflow:auto; padding:22px 28px; display:none; }
+  .contour { margin-bottom:24px; }
+  .contour-h { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--dim); margin-bottom:10px; }
+  .contour-h span { background:#e5e7eb; border-radius:10px; padding:1px 8px; margin-left:6px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:9px; padding:12px 14px; cursor:pointer; box-shadow:0 1px 2px rgba(0,0,0,.04); transition:transform .12s, box-shadow .12s; }
+  .card:hover { box-shadow:0 4px 12px rgba(0,0,0,.10); transform:translateY(-1px); }
+  .card-t { font-weight:600; font-size:14px; }
+  .card-s { color:var(--dim); font-size:12px; margin-top:2px; }
+  .card-m { color:#9aa3af; font-size:11px; margin-top:7px; }
+  .spec { max-width:940px; margin:0 auto; padding-bottom:40px; }
+  .spec-h { display:flex; align-items:center; gap:8px; font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#64748b; margin:26px 0 12px; }
+  .spec-h::before { content:''; width:14px; height:2px; background:currentColor; border-radius:2px; }
+  .spec-h .n { background:#eef2f7; color:#64748b; border-radius:10px; padding:1px 8px; font-size:11px; letter-spacing:0; }
+  .spec-h.feature { color:#9333ea; } .spec-h.entity { color:#2563eb; } .spec-h.action { color:#16a34a; } .spec-h.flow { color:#0d9488; }
+  /* per-type triad: --accent (rail/dot) · --tint (badge bg, hover) · --ink (badge text) */
+  .item.feature { --accent:#a855f7; --tint:#f3e8ff; --ink:#9333ea; }
+  .item.entity  { --accent:#3b82f6; --tint:#dbeafe; --ink:#2563eb; }
+  .item.action  { --accent:#22c55e; --tint:#dcfce7; --ink:#16a34a; }
+  .item.flow    { --accent:#14b8a6; --tint:#ccfbf1; --ink:#0d9488; }
+  details.item { border:1px solid var(--line); border-left:3px solid var(--accent,#999); border-radius:8px; margin-bottom:8px; background:var(--panel); box-shadow:0 1px 2px rgba(16,24,40,.06); transition:box-shadow .14s, border-color .14s; }
+  details.item:hover { box-shadow:0 4px 14px rgba(16,24,40,.10); }
+  details.item[open] { box-shadow:0 2px 10px rgba(16,24,40,.07); border-color:#dfe3e9; }
+  details.item > summary { padding:11px 14px; cursor:pointer; list-style:none; display:flex; align-items:center; gap:9px; }
+  details.item > summary:hover { background:var(--tint); }
+  details.item > summary::-webkit-details-marker { display:none; }
+  details.item > summary::before { content:'▶'; font-size:8px; color:var(--dim); }
+  details.item[open] > summary::before { content:'▼'; }
+  details.item .t { font-weight:600; font-size:13.5px; letter-spacing:-.01em; display:flex; align-items:center; }
+  details.item .t::before { content:''; display:inline-block; width:7px; height:7px; border-radius:2px; background:var(--accent); margin-right:8px; flex:none; }
+  details.item.feature .t { font-size:15px; font-weight:650; color:#1f2937; }
+  details.item.action .t { font-family:ui-monospace,monospace; font-size:12.5px; }
+  details.item .body { padding:2px 14px 13px 34px; font-size:12px; color:#374151; }
+  .kv { color:var(--dim); margin:8px 0 3px; font-size:10px; font-weight:700; letter-spacing:.04em; }
+  .tag { background:var(--tint,#eef2f7); color:var(--ink,#475569); border-radius:10px; padding:2px 9px; font-size:11px; font-weight:600; }
+  .chip2 { display:inline-block; background:#f3f4f6; border:1px solid var(--line); border-radius:6px; padding:1px 7px; margin:2px 3px 0 0; font-size:11px; }
+  .coderef { margin-left:auto; font-family:ui-monospace,monospace; font-size:11px; color:#2563eb; cursor:pointer; white-space:nowrap; }
+  .coderef:hover { text-decoration:underline; }
+  details.item .desc { color:#334155; margin-bottom:6px; line-height:1.45; }
+  .chip2.lnk { cursor:pointer; }
+  .chip2.lnk.to-entity { color:#2563eb; border-color:#dbeafe; } .chip2.lnk.to-entity:hover { background:#dbeafe; }
+  .chip2.lnk.to-action { color:#16a34a; border-color:#dcfce7; } .chip2.lnk.to-action:hover { background:#dcfce7; }
+  .chip2.lnk.to-feature { color:#9333ea; border-color:#f3e8ff; } .chip2.lnk.to-feature:hover { background:#f3e8ff; }
+  .ftbl { width:100%; border-collapse:collapse; margin:4px 0; font-size:12px; }
+  .ftbl th { text-align:left; padding:4px 8px; color:#94a3b8; font-weight:700; font-size:10px; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--line); }
+  .ftbl td { padding:4px 8px; border-bottom:1px solid #f1f3f5; }
+  .ftbl tbody tr:hover { background:#f9fafb; }
+  .ftbl .fn { font-family:ui-monospace,monospace; font-weight:600; color:#1f2937; }
+  .ftbl .fty { font-family:ui-monospace,monospace; color:#7c3aed; }
+  .req-yes { color:#059669; font-weight:600; } .req-no { color:#9ca3af; }
+  .chain { display:flex; flex-wrap:wrap; align-items:center; gap:6px; background:#f9fafb; border:1px solid var(--line); border-radius:6px; padding:8px 10px; }
+  .chain .step { font-family:ui-monospace,monospace; color:#16a34a; font-weight:600; font-size:11.5px; cursor:pointer; }
+  .chain .step:hover { text-decoration:underline; }
+  .chain .arw { color:#cbd5e1; }
+  ul.bl { margin:3px 0 2px; padding-left:18px; } ul.bl li { margin:2px 0; color:#374151; }
+  .srcb { background:#f1f5f9; color:#94a3b8; border-radius:8px; padding:1px 7px; font-size:10px; font-weight:600; }
+  .pd { display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .pd.ok { background:#22c55e; } .pd.spec { background:#f59e0b; } .pd.code { background:#3b82f6; }
+  #side { width:300px; background:var(--panel); border-left:1px solid var(--line); padding:14px 16px; overflow:auto; }
+  #side h3 { margin:0 0 4px; font-size:14px; }
+  #side .sub { color:var(--dim); margin-bottom:10px; }
+  .row { padding:7px 0; border-bottom:1px solid var(--line); cursor:pointer; }
+  .row:hover { background:#f9fafb; }
+  .row b { font-weight:600; }
+  .chip { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; margin:3px 3px 0 0; color:#fff; }
+  .mut { color:var(--dim); }
+  .hint { color:var(--dim); font-size:12px; }
+  .legend { position:absolute; bottom:12px; left:16px; background:rgba(255,255,255,.94); border:1px solid var(--line); border-radius:8px; padding:8px 12px; font-size:11px; color:var(--dim); box-shadow:0 1px 4px rgba(0,0,0,.06); }
+  .legend i { display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px; vertical-align:middle; }
+  .legend .e { display:inline-block; width:16px; border-top:2px solid; margin-right:5px; vertical-align:middle; }
+</style>
+</head>
+<body>
+<div id="top">
+  <div id="crumbs"></div>
+  <div id="mode"><button data-m="tech">Tech</button><button data-m="business">Business</button></div>
+  <span class="tog">
+    <input id="search" placeholder="Search…">
+    <label><input type="checkbox" id="ti" checked> imports</label>
+    <label><input type="checkbox" id="tc" checked> calls</label>
+  </span>
+</div>
+<div id="wrap"><div id="stage"><div id="cy"></div><div id="board"></div></div><div id="side"></div></div>
+<div class="legend" id="legend"></div>
+<script>
+const DATA = /*__DATA__*/;
+
+const ROLE = { ui:'#3b82f6', api:'#f59e0b', 'data-access':'#10b981', domain:'#8b5cf6', business:'#8b5cf6',
+  integration:'#06b6d4', infra:'#6b7280', model:'#ef4444', util:'#9ca3af', test:'#cbd5e1' };
+const SYS = { frontend:'#3b82f6', service:'#10b981', worker:'#f59e0b', gateway:'#06b6d4', library:'#6b7280', infra:'#6b7280' };
+const roleColor = rs => (rs && rs.length ? (ROLE[rs[0]] || '#9ca3af') : '#94a3b8');
+const base = p => (p || '').split('/').pop();
+const titlecase = s => s ? s[0].toUpperCase() + s.slice(1) : s;
+
+let cy = null;
+let nav = { level: 'platform' };          // {level:'platform'} | {level:'system',sys} | {level:'cluster',sys,cl}
+
+// ── navigation ──────────────────────────────────────────────────
+function crumbs() {
+  const el = document.getElementById('crumbs'); const parts = [];
+  parts.push(`<span class="c" onclick="go({level:'platform'})">▦ Platform</span>`);
+  if (nav.level !== 'platform') {
+    const sname = (DATA.systems.find(s => s.id === nav.sys) || {}).name || nav.sys;
+    parts.push(`<span class="sep">/</span><span class="c" onclick="go({level:'system',sys:'${nav.sys}'})">${sname}</span>`);
+  }
+  if (nav.level === 'cluster') {
+    const c = clustersOf(nav.sys).find(c => c.id === nav.cl);
+    parts.push(`<span class="sep">/</span><span class="c">${(c && c.name) || nav.cl}</span>`);
+  }
+  el.innerHTML = parts.join('');
+}
+let mode = 'tech'; // 'tech' (systems/files/call-graph) | 'business' (features/entities/actions/flows)
+function setMode(m) { mode = m; render(); }
+function modeUI() { document.querySelectorAll('#mode button').forEach(b => b.classList.toggle('on', b.dataset.m === mode)); }
+function go(n) { nav = n; render(); }
+function render() {
+  crumbs(); modeUI();
+  document.querySelector('.tog').style.visibility = (mode === 'tech' && nav.level !== 'platform') ? 'visible' : 'hidden';
+  if (nav.level === 'platform') (mode === 'tech' ? renderPlatform() : renderPlatformBusiness());
+  else if (nav.level === 'system') (mode === 'tech' ? renderSystem(nav.sys) : renderSystemBusiness(nav.sys));
+  else renderCluster(nav.sys, nav.cl);
+}
+
+// Platform Business summary: every system's features/entities/actions/flows + shared entities.
+function renderPlatformBusiness() {
+  showBoard(); setLegend('role');
+  const realEnts = m => (m.entities || []).filter(e => (e.fields || []).length > 0);
+  // platform-level enrichment = aggregate per-system enrich: a shared entity inherits the
+  // description from whichever system already described it. Rich cross-flow/architecture
+  // prose is new content → Tier 1 (--platform --tier llm).
+  const sharedDesc = name => {
+    for (const s of DATA.systems) {
+      const g = DATA.graph[s.id] || {}, e = ((g.model || {}).entities || []).find(e => e.entity_name === name);
+      if (e) { const d = (((g.enrich || {}).entities || {})[e.entity_id] || {}).description; if (d) return d; }
+    }
+    return '';
+  };
+  let html = `<div class="contour"><div class="contour-h">Systems — business summary <span>${DATA.systems.length}</span></div><div class="cards">`;
+  let tF = 0, tE = 0, tA = 0, tFl = 0;
+  for (const s of DATA.systems) {
+    const g = DATA.graph[s.id] || {}, m = g.model || {};
+    const ne = realEnts(m).length, na = (m.actions || []).length, nf = (m.features || []).length, nfl = (g.flows || []).length;
+    tE += ne; tA += na; tF += nf; tFl += nfl;
+    html += `<div class="card" style="--accent:#8b5cf6" onclick="go({level:'system',sys:'${s.id}'})"><div class="card-t">${s.name}</div>`
+      + `${s.technology ? `<div class="card-s">${s.technology}</div>` : ''}`
+      + `<div class="card-m">${nf} features · ${ne} entities · ${na} actions · ${nfl} flows</div></div>`;
+  }
+  html += `</div></div>`;
+  const shared = (DATA.integrations.shared_entities) || [];
+  if (shared.length) html += `<div class="contour"><div class="contour-h">Shared entities <span>${shared.length}</span></div><div class="cards">`
+    + shared.map(s => { const d = sharedDesc(s.entity_name); return `<div class="card" style="--accent:#3b82f6"><div class="card-t">${s.entity_name}</div>${d ? `<div class="card-s">${d}</div>` : ''}<div class="card-m">${(s.systems || []).map(x => x[0]).join(' · ')}</div></div>`; }).join('') + `</div></div>`;
+  document.getElementById('board').innerHTML = html;
+  side(`<h3>Platform — Business</h3><div class="sub">${DATA.systems.length} systems</div>`
+    + `<div class="hint">${tF} features · ${tE} entities · ${tA} actions · ${tFl} flows total</div>`);
+}
+
+// Business lens: the FDML semantic layer — features / domain entities / actions / flows.
+function renderSystemBusiness(sys) {
+  showBoard();
+  const g = DATA.graph[sys] || {}, m = g.model || {};
+  const ents = (m.entities || []).filter(e => (e.fields || []).length > 0);
+  const acts = m.actions || [], feats = m.features || [], flows = g.flows || [];
+  // index: which features reference each entity/action id → "USED IN"
+  const entName = {}; for (const e of (m.entities || [])) entName[e.entity_id] = e.entity_name;
+  const actName = {}; for (const a of acts) actName[a.action_id] = a.action_name;
+  // provenance / source signals (inert until a spec is loaded — R3 is all code-inferred)
+  const srcVals = new Set([...ents, ...acts, ...feats].map(x => x.source));
+  const mixedSrc = srcVals.size > 1;
+  const srcb = x => mixedSrc && x.source && x.source !== 'spec' ? '<span class="srcb">inferred</span>' : '';
+  const hasSpec = ents.some(e => (e.fields || []).some(f => f.in_spec));
+  // best-matching flow for a feature = the flow whose steps overlap its actions most
+  const flowFor = f => { const set = new Set(f.actions || []); let best = null, bestN = 0; for (const fl of flows) { const n = (fl.steps || []).filter(s => set.has(s.action_id)).length; if (n > bestN) { bestN = n; best = fl; } } return best; };
+  const chain = steps => `<div class="chain">${(steps || []).map((s, j) => `${j ? '<span class="arw">→</span>' : ''}<span class="step" onclick="gotoEl('a-${s.action_id}')" title="${(s.description || '').replace(/["\n]/g, ' ')}">${s.action_name || s.action_id || '?'}</span>`).join('')}</div>`;
+  const link = (target, label) => { const t = target[0] === 'e' ? 'to-entity' : target[0] === 'a' ? 'to-action' : 'to-feature'; return `<span class="chip2 lnk ${t}" onclick="gotoEl('${target}')">${label}</span>`; };
+  const featOf = {};
+  for (const f of feats) for (const id of (f.entities || []).concat(f.actions || [])) (featOf[id] = featOf[id] || []).push(f);
+  const usedIn = id => (featOf[id] || []).length ? `<div class="kv">USED IN</div>${[...new Map(featOf[id].map(f => [f.feature_id, f])).values()].map(f => link('f-' + f.feature_id, f.title || f.feature_id)).join('')}` : '';
+  const cr = ref => ref ? `<span class="coderef" onclick="event.stopPropagation();jumpToCode('${sys}','${ref}')">${ref} ↗</span>` : '';
+  const det = (id, type, title, badge, body) => `<details id="${id}" class="item ${type}"><summary><span class="t">${title}</span>${badge}</summary><div class="body">${body}</div></details>`;
+  const sh = (type, label, n) => `<div class="spec-h ${type}">${label} <span class="n">${n}</span></div>`;
+  const enr = g.enrich || {};
+  const desc = (kind, id) => { const d = ((enr[kind] || {})[id] || {}).description; return d ? `<div class="desc">${d}</div>` : ''; };
+  const ax = id => (enr.actions || {})[id] || {};
+  const bullets = (label, arr) => (arr && arr.length) ? `<div class="kv">${label}</div><ul class="bl">${arr.map(s => `<li>${s}</li>`).join('')}</ul>` : '';
+  const outBlock = o => (o && o.entity) ? `<div class="kv">OUTPUT</div><span class="chip2">${o.entity}${(o.fields || []).length ? ': ' + o.fields.join(', ') : ''}</span>` : '';
+  const rels = id => { const r = ((enr.entities || {})[id] || {}).relationships; return (r && r.length) ? `<div class="kv">RELATIONSHIPS</div>${r.map(x => `<span class="chip2">${x.kind} → ${x.target}</span>`).join('')}` : ''; };
+  const fenr = id => ((enr.entities || {})[id] || {}).fields || {};
+  const fieldTable = e => {
+    if (!(e.fields || []).length) return '<div class="mut" style="padding:2px 0">no fields</div>';
+    const fe = fenr(e.entity_id);
+    return `<table class="ftbl"><thead><tr><th>Field</th><th>Type</th><th>Req</th><th>Description</th></tr></thead><tbody>`
+      + e.fields.map(x => { const fi = fe[x.name] || {}; const req = fi.required === false ? '<span class="req-no">no</span>' : fi.required ? '<span class="req-yes">yes</span>' : ''; const prov = hasSpec ? (x.in_spec && x.in_code ? '<span class="pd ok" title="in spec & code"></span>' : x.in_spec ? '<span class="pd spec" title="spec only — missing in code"></span>' : '<span class="pd code" title="code only — not in spec"></span>') : ''; return `<tr><td class="fn">${prov}${x.name}</td><td class="fty">${fi.type || ''}</td><td>${req}</td><td class="mut">${fi.description || ''}</td></tr>`; }).join('')
+      + `</tbody></table>`;
+  };
+
+  let html = '<div class="spec">';
+  if (feats.length) html += sh('feature', 'Features', feats.length)
+    + feats.map(f => { const fe = [...new Set(f.entities || [])], fa = [...new Set(f.actions || [])], fl = flowFor(f);
+      return det('f-' + f.feature_id, 'feature', f.title || f.feature_id, `<span class="tag">${fa.length} actions · ${fe.length} entities</span>${srcb(f)}`,
+      `${desc('features', f.feature_id)}<div class="kv">MODULE</div>${f.module_path || '—'}<div class="kv">ENTITIES</div>${fe.map(id => link('e-' + id, entName[id] || id)).join('') || '—'}<div class="kv">ACTIONS</div>${fa.map(id => link('a-' + id, actName[id] || id)).join('') || '—'}${fl ? `<div class="kv">DATA FLOW</div>${chain(fl.steps)}` : ''}`); }).join('');
+  if (ents.length) html += sh('entity', 'Domain entities', ents.length)
+    + ents.map(e => det('e-' + e.entity_id, 'entity', e.entity_name, `<span class="tag">${(e.fields || []).length} fields</span>${srcb(e)}${cr(e.code_ref)}`,
+      `${desc('entities', e.entity_id)}${fieldTable(e)}${rels(e.entity_id)}${usedIn(e.entity_id)}`)).join('');
+  if (acts.length) html += sh('action', 'Actions', acts.length)
+    + acts.map(a => det('a-' + a.action_id, 'action', a.action_name, `${(a.input || []).length ? `<span class="tag">${a.input.length} in</span>` : ''}${srcb(a)}${cr(a.code_ref)}`,
+      `${desc('actions', a.action_id)}<div class="kv">INPUT</div>${(a.input || []).map(p => `<span class="chip2">${p.name}${p.param_type ? ': ' + p.param_type : ''}${p.required === false ? ' <span class="req-no">opt</span>' : ''}</span>`).join('') || '—'}${outBlock(ax(a.action_id).output)}${bullets('PRECONDITIONS', ax(a.action_id).preconditions)}${bullets('POSTCONDITIONS', ax(a.action_id).postconditions)}${bullets('SIDE EFFECTS', ax(a.action_id).side_effects)}${usedIn(a.action_id)}`)).join('');
+  if (flows.length) html += sh('flow', 'Flows', flows.length)
+    + flows.map((fl, i) => det('fl-' + i, 'flow', fl.name, `<span class="tag">${(fl.steps || []).length} steps</span>`, chain(fl.steps))).join('');
+  html += '</div>';
+  document.getElementById('board').innerHTML = html || '<div class="hint" style="padding:24px">No business model extracted for this system.</div>';
+  const cov = ((m.coverage || {}).code_coverage || {}).percentage, unlinked = (m.unlinked_code || []).length, specLoaded = (m.metadata || {}).spec_loaded;
+  const next = enr.tier === 'instant' ? `fdml enrich <root> --system ${sys} --tier llm` : `fdml enrich <root> --system ${sys}`;
+  side(`<h3>${(DATA.systems.find(s => s.id === sys) || {}).name || sys}</h3><div class="sub">Business view</div>`
+    + `<div class="hint">${ents.length} entities · ${acts.length} actions · ${feats.length} features · ${flows.length} flows</div>`
+    + (specLoaded && (cov != null || unlinked) ? `<div class="hint" style="margin-top:6px">coverage <b>${cov != null ? cov + '%' : '—'}</b>${unlinked ? ` · ${unlinked} unlinked` : ''}</div>` : '')
+    + (srcVals.size === 1 && srcVals.has('suggested') ? `<div class="hint" style="margin-top:6px">source: inferred from code (no spec)</div>` : '')
+    + `<div class="hint" style="margin-top:8px">enrich: <b>${enr.tier || 'none'}</b> · `
+    + `<span class="coderef" title="${next}" onclick="navigator.clipboard&&navigator.clipboard.writeText('${next}')">${enr.tier === 'instant' ? 'escalate to llm ↗' : enr.tier === 'llm' ? 'done' : 'run instant ↗'}</span></div>`
+    + `<div class="hint" style="margin-top:8px">Click a <span class="coderef">code ref ↗</span> to jump to its file in the Tech graph.</div>`);
+}
+// Local spec navigation: open + scroll + flash a referenced entity/action/feature card.
+function gotoEl(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.open = true;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.style.boxShadow = '0 0 0 2px #3b82f6';
+  setTimeout(() => { el.style.boxShadow = ''; }, 1200);
+}
+// Bridge Business→Tech: jump from a code_ref to its file in the call/import graph and focus it.
+function jumpToCode(sys, codeRef) {
+  const file = codeRef.split(':')[0];
+  mode = 'tech'; nav = { level: 'system', sys }; render();
+  const hit = cy.nodes('[kind="file"]').filter(n => { const id = n.id(); return id === file || id.endsWith('/' + file) || file.endsWith('/' + id) || base(id) === base(file); });
+  if (hit.length) { focusNode(hit[0]); fileInfo(sys, hit[0]); cy.animate({ fit: { eles: hit[0].closedNeighborhood(), padding: 130 } }, { duration: 300 }); }
+}
+
+// ── data helpers ────────────────────────────────────────────────
+const clustersOf = sys => ((DATA.graph[sys] || {}).clusters || {}).clusters || [];
+const depOf = sys => (DATA.graph[sys] || {}).depgraph || { nodes: [], edges: [] };
+function fileClusterMap(sys) {
+  const m = {}; for (const c of clustersOf(sys)) for (const f of (c.members || [])) m[f] = c.id; return m;
+}
+// cohesion = internal edges / (internal + boundary) for a cluster
+function clusterHealth(sys) {
+  const fc = fileClusterMap(sys), internal = {}, boundary = {};
+  for (const c of clustersOf(sys)) { internal[c.id] = 0; boundary[c.id] = 0; }
+  for (const e of depOf(sys).edges) {
+    const a = fc[e.from], b = fc[e.to];
+    if (a == null && b == null) continue;
+    if (a === b) internal[a]++;
+    else { if (a != null) boundary[a]++; if (b != null) boundary[b]++; }
+  }
+  const h = {};
+  for (const c of clustersOf(sys)) { const t = internal[c.id] + boundary[c.id]; h[c.id] = t ? internal[c.id] / t : 1; }
+  return h;
+}
+
+// ── level 1: platform ───────────────────────────────────────────
+const CONTOUR = { frontend:'Presentation', service:'Core', worker:'Core', gateway:'Integration', library:'Infrastructure', infra:'Infrastructure' };
+const contourOf = t => CONTOUR[t] || 'Other';
+const ORDER = ['Presentation', 'Integration', 'Core', 'Infrastructure', 'Other'];
+function showBoard() { document.getElementById('cy').style.display = 'none'; document.getElementById('board').style.display = 'block'; }
+function showGraph() { document.getElementById('board').style.display = 'none'; document.getElementById('cy').style.display = 'block'; }
+
+// Platform overview = HTML cards grouped by contour (deliberate layout, not a force graph).
+function renderPlatform() {
+  showBoard(); setLegend('sys');
+  const byC = {};
+  for (const s of DATA.systems) { const c = contourOf(s.system_type); (byC[c] = byC[c] || []).push(s); }
+  let html = '';
+  for (const c of ORDER.filter(c => byC[c])) {
+    const list = byC[c].slice().sort((a, b) => (depOf(b.id).nodes.length - depOf(a.id).nodes.length) || a.name.localeCompare(b.name));
+    html += `<div class="contour"><div class="contour-h">${c} <span>${list.length}</span></div><div class="cards">`;
+    for (const s of list) {
+      const dep = depOf(s.id);
+      html += `<div class="card" style="--accent:${SYS[s.system_type] || '#6b7280'}" onclick="go({level:'system',sys:'${s.id}'})">`
+        + `<div class="card-t">${s.name}</div><div class="card-s">${s.technology}</div>`
+        + `<div class="card-m">${dep.nodes.length} files · ${dep.edges.length} edges · ${clustersOf(s.id).length} modules</div></div>`;
+    }
+    html += `</div></div>`;
+  }
+  document.getElementById('board').innerHTML = html;
+  const ints = (DATA.integrations.integrations) || [], shared = (DATA.integrations.shared_entities) || [];
+  side(`<h3>Platform</h3><div class="sub">${DATA.systems.length} systems · ${ints.length} integrations · ${shared.length} shared</div>`
+    + `<div class="hint">Click a system card to open its connected graph.</div>`
+    + (shared.length ? `<div style="margin-top:12px"><b>Shared entities</b></div>` + shared.map(s => `<div class="row"><b>${s.entity_name}</b><br><span class="mut">${(s.systems || []).map(x => x[0]).join(' · ')}</span></div>`).join('') : ''));
+}
+
+// ── level 2: system → clusters (aggregated edges + health) ───────
+function renderSystem(sys) {
+  setLegend('role');
+  const cls = clustersOf(sys), dep = depOf(sys), fc = fileClusterMap(sys), health = clusterHealth(sys);
+  const clById = {}; for (const c of cls) clById[c.id] = c;
+  const roleOf = f => { const c = clById[fc[f]]; return c ? roleColor(c.roles) : '#94a3b8'; };
+
+  // Deterministic module-packed layout: each MODULE is a box, its files gridded inside,
+  // boxes flowed left-to-right and wrapped. No cose chaos, no compound breakage. Edges
+  // (call/import) draw between files, so cross-module dependencies stay visible.
+  const byCl = {}; for (const f of dep.nodes) { const k = fc[f] || '_'; (byCl[k] = byCl[k] || []).push(f); }
+  const order = Object.keys(byCl).sort((a, b) => byCl[b].length - byCl[a].length);
+  const pos = {}, boxes = []; let x = 0, y = 0, rowH = 0; const MAXW = 1750;
+  for (const k of order) {
+    const files = byCl[k].slice().sort();
+    const fcols = Math.min(6, Math.max(2, Math.ceil(Math.sqrt(files.length))));
+    const w = fcols * 76 + 44, h = Math.ceil(files.length / fcols) * 58 + 64;
+    if (x + w > MAXW && x > 0) { x = 0; y += rowH + 72; rowH = 0; }
+    files.forEach((f, fi) => { pos[f] = { x: x + 56 + (fi % fcols) * 76, y: y + 62 + Math.floor(fi / fcols) * 58 }; });
+    const c = clById[k];
+    boxes.push({ id: 'm_' + k, label: (c && c.name) || 'misc', color: roleColor(c && c.roles), cx: x + w / 2, cy: y + h / 2, w, h });
+    x += w + 72; rowH = Math.max(rowH, h);
+  }
+  const els = [];
+  for (const b of boxes) els.push({ data: { id: b.id, label: b.label, kind: 'modulebg', color: b.color, w: b.w, h: b.h }, position: { x: b.cx, y: b.cy }, selectable: false, grabbable: false });
+  for (const f of dep.nodes) els.push({ data: { id: f, label: base(f), kind: 'file', color: roleOf(f), cl: fc[f] }, position: pos[f] });
+  dep.edges.forEach((e, n) => els.push({ data: { id: 'e' + n, source: e.from, target: e.to, ekind: e.kind } }));
+  draw(els, { name: 'preset' });
+  cy.on('tap', 'node', e => {
+    const k = e.target.data('kind');
+    if (k === 'file') { focusNode(e.target); fileInfo(sys, e.target); }
+    else if (k === 'modulebg') highlightCluster(e.target.id().slice(2));
+  });
+  const flows = (DATA.graph[sys] || {}).flows || [];
+  side(`<h3>${(DATA.systems.find(s => s.id === sys) || {}).name || sys}</h3><div class="sub">${dep.nodes.length} files · ${dep.edges.length} edges · ${cls.length} modules · ${flows.length} flows</div>`
+    + `<div class="hint">Whole graph shown. Click a module to highlight it; a file for its edges.</div><div style="margin-top:10px"></div>`
+    + cls.map(c => `<div class="row" onclick="highlightCluster('${c.id}')"><b>${c.name}</b> <span class="mut">(${c.size})</span> · cohesion ${(health[c.id] * 100 | 0)}%<br>${(c.roles || []).map(r => `<span class="chip" style="background:${ROLE[r] || '#94a3b8'}">${r}</span>`).join('') || '<span class="mut">no role</span>'}</div>`).join(''));
+}
+function focusNode(n) {
+  cy.elements().removeClass('dim hl');
+  cy.elements().addClass('dim');
+  n.closedNeighborhood().removeClass('dim').addClass('hl');
+}
+function highlightCluster(clId) {
+  if (!cy) return;
+  cy.elements().removeClass('dim hl');
+  const inCl = cy.nodes().filter(n => n.data('cl') === clId);
+  if (!inCl.length) return;
+  cy.elements().addClass('dim');
+  inCl.removeClass('dim').addClass('hl').style('text-opacity', 1);
+  inCl.connectedEdges().removeClass('dim');
+  cy.fit(inCl, 90);
+}
+
+// ── level 3: cluster → files (call/import graph) ─────────────────
+function renderCluster(sys, clId) {
+  setLegend('edges');
+  const dep = depOf(sys), fc = fileClusterMap(sys);
+  const cl = clustersOf(sys).find(c => c.id === clId) || { members: [], name: clId };
+  const inCl = new Set(cl.members || []);
+  const els = [];
+  for (const f of cl.members || []) els.push({ data: { id: f, label: base(f), kind: 'file', color: roleColor(cl.roles) } });
+  dep.edges.forEach((e, n) => { if (inCl.has(e.from) && inCl.has(e.to)) els.push({ data: { id: 'e' + n, source: e.from, target: e.to, ekind: e.kind } }); });
+  draw(els);
+  cy.on('tap', 'node', e => fileInfo(sys, e.target));
+  side(`<h3>${cl.name}</h3><div class="sub">${(cl.members || []).length} files · roles: ${(cl.roles || []).join(', ') || '—'}</div><div class="hint">Click a file for its call/import edges.</div>`);
+}
+function fileInfo(sys, node) {
+  const outs = node.outgoers('edge'), ins = node.incomers('edge');
+  const m = (DATA.graph[sys] || {}).model || {}, fid = node.id(), fileOf = r => (r || '').split(':')[0];
+  const match = r => fileOf(r) === fid || fid.endsWith('/' + fileOf(r)) || base(fileOf(r)) === base(fid);
+  const impl = [...(m.entities || []).filter(e => match(e.code_ref)).map(e => '◆ ' + e.entity_name),
+                ...(m.actions || []).filter(a => match(a.code_ref)).map(a => '▸ ' + a.action_name)];
+  side(`<h3>${base(node.id())}</h3><div class="sub">${node.id()}</div>`
+    + (impl.length ? `<b>implements (${impl.length})</b> <span class="coderef" onclick="setMode('business')">Business ↗</span>` + impl.map(x => `<div class="mut">${x}</div>`).join('') + '<div style="margin-top:8px"></div>' : '')
+    + `<b>depends on (${outs.length})</b>` + outs.map(e => `<div class="mut">${e.data('ekind')} → ${base(e.target().id())}</div>`).join('')
+    + `<div style="margin-top:8px"></div><b>used by (${ins.length})</b>` + ins.map(e => `<div class="mut">${base(e.source().id())} (${e.data('ekind')})</div>`).join(''));
+}
+
+// ── render core ─────────────────────────────────────────────────
+function draw(els, layout) {
+  showGraph();
+  if (cy) cy.destroy();
+  cy = cytoscape({
+    container: document.getElementById('cy'),
+    elements: els,
+    style: [
+      { selector: 'node[kind="modulebg"]', style: { 'background-color': 'data(color)', 'background-opacity': 0.07, 'border-color': 'data(color)', 'border-width': 1.5, 'shape': 'round-rectangle', 'label': 'data(label)', 'color': '#334155', 'font-size': 15, 'font-weight': 700, 'text-valign': 'top', 'text-margin-y': 9, 'width': 'data(w)', 'height': 'data(h)', 'z-index': 0 } },
+      { selector: 'node[kind="contour"]', style: { 'background-color': '#eceff3', 'background-opacity': 0.7, 'border-color': '#cbd5e1', 'border-width': 1, 'shape': 'round-rectangle', 'label': 'data(label)', 'color': '#64748b', 'font-size': 12, 'font-weight': 700, 'text-valign': 'top', 'text-margin-y': 6, 'padding': '22px' } },
+      { selector: 'node[kind="box"]', style: { 'background-color': 'data(color)', 'background-opacity': 0.14, 'border-color': 'data(color)', 'border-width': 2, 'shape': 'round-rectangle', 'label': 'data(label)', 'color': '#111827', 'font-size': 13, 'font-weight': 600, 'text-valign': 'center', 'text-wrap': 'wrap', 'text-max-width': '150px', 'width': 'label', 'height': 'mapData(sz, 0, 120, 36, 80)', 'padding': '14px' } },
+      { selector: 'node[kind="file"]', style: { 'background-color': 'data(color)', 'label': 'data(label)', 'color': '#374151', 'font-size': 9, 'width': 13, 'height': 13, 'text-valign': 'bottom', 'text-margin-y': 2, 'z-index': 10 } },
+      { selector: 'edge', style: { 'width': 1.3, 'line-color': '#94a3b8', 'target-arrow-color': '#94a3b8', 'target-arrow-shape': 'triangle', 'arrow-scale': 0.7, 'curve-style': 'bezier', 'control-point-step-size': 18, 'opacity': 0.45, 'z-index': 5 } },
+      { selector: 'edge[ekind="call"]', style: { 'line-color': '#3b82f6', 'target-arrow-color': '#3b82f6', 'opacity': 0.7 } },
+      { selector: 'edge[ekind="import"]', style: { 'line-style': 'dashed', 'line-color': '#cbd5e1', 'target-arrow-color': '#cbd5e1' } },
+      { selector: 'edge[label]', style: { 'label': 'data(label)', 'font-size': 9, 'color': '#6b7280', 'text-rotation': 'autorotate', 'text-background-color': '#f6f7f9', 'text-background-opacity': 1, 'text-background-padding': 2 } },
+      { selector: '.dim', style: { 'opacity': 0.1 } },
+      { selector: '.hl', style: { 'border-width': 3, 'border-color': '#111827', 'text-opacity': 1, 'z-index': 99 } },
+    ],
+    layout: layout || layoutFor(els),
+    wheelSensitivity: 0.2,
+  });
+  cy.on('tap', e => { if (e.target === cy) cy.elements().removeClass('dim hl'); });
+  // Hover a file → reveal its name + neighbours, emphasise its edges (key for big graphs
+  // where file labels are hidden by default).
+  cy.on('mouseover', 'node[kind="file"]', e => {
+    const n = e.target;
+    n.style('text-opacity', 1);
+    n.openNeighborhood('node[kind="file"]').forEach(x => x.style('text-opacity', 1));
+    n.connectedEdges().style({ opacity: 0.95, width: 2 });
+  });
+  cy.on('mouseout', 'node[kind="file"]', e => {
+    const big = cy.nodes('[kind="file"]').length > 60, n = e.target;
+    const hide = x => { if (big && !x.hasClass('hl')) x.style('text-opacity', 0); };
+    hide(n); n.openNeighborhood('node[kind="file"]').forEach(hide);
+    n.connectedEdges().style({ opacity: '', width: '' });
+  });
+  // cose with animate:false lays out synchronously during construction, so fit directly
+  // (a layoutstop handler would attach too late and never fire).
+  cy.fit(undefined, 60);
+  if (cy.zoom() > 1.0) { cy.zoom(0.95); cy.center(); }
+  // Zoom-dependent file labels (like a map): hidden in overview, appear as you zoom in.
+  const updateLabels = () => {
+    const show = cy.zoom() > 0.8 || cy.nodes('[kind="file"]').length <= 55;
+    cy.nodes('[kind="file"]').forEach(n => { if (!n.hasClass('hl')) n.style('text-opacity', show ? 1 : 0); });
+  };
+  cy.on('zoom', updateLabels); updateLabels();
+  applyToggles();
+}
+function layoutFor(els) {
+  const n = els.filter(e => !e.data.source).length;
+  // built-in cose on FLAT graphs (no compounds) — clean + reliable. Tuned per size.
+  return { name: 'cose', animate: false, padding: 36, nodeRepulsion: n > 40 ? 9000 : 16000,
+    idealEdgeLength: 110, edgeElasticity: 0.3, gravity: 0.25, nestingFactor: 1, randomize: false, componentSpacing: 90 };
+}
+
+// ── overlays (no relayout) ──────────────────────────────────────
+function applyToggles() {
+  if (!cy) return;
+  const si = document.getElementById('ti').checked, sc = document.getElementById('tc').checked;
+  cy.edges().forEach(e => { const k = e.data('ekind'); if (k === 'import') e.style('display', si ? 'element' : 'none'); else if (k === 'call') e.style('display', sc ? 'element' : 'none'); });
+}
+document.getElementById('ti').onchange = applyToggles;
+document.getElementById('tc').onchange = applyToggles;
+document.getElementById('search').oninput = e => {
+  const q = e.target.value.trim().toLowerCase();
+  if (!cy) return;
+  cy.elements().removeClass('dim hl');
+  if (!q) return;
+  const hit = cy.nodes().filter(n => (n.data('label') || '').toLowerCase().includes(q) || (n.id() || '').toLowerCase().includes(q));
+  if (hit.length) { cy.elements().addClass('dim'); hit.removeClass('dim').addClass('hl'); hit.connectedEdges().removeClass('dim'); cy.fit(hit, 80); }
+};
+
+function setLegend(mode) {
+  const el = document.getElementById('legend');
+  if (mode === 'sys') el.innerHTML = Object.entries(SYS).map(([k, c]) => `<i style="background:${c}"></i>${k}`).join('&nbsp;&nbsp;');
+  else if (mode === 'role') el.innerHTML = Object.entries(ROLE).slice(0, 7).map(([k, c]) => `<i style="background:${c}"></i>${k}`).join('&nbsp;&nbsp;');
+  else el.innerHTML = `<span class="e" style="border-color:#3b82f6"></span>call&nbsp;&nbsp;<span class="e" style="border-color:#cbd5e1;border-top-style:dashed"></span>import`;
+}
+function side(html) { document.getElementById('side').innerHTML = html; }
+
+document.querySelectorAll('#mode button').forEach(b => b.onclick = () => setMode(b.dataset.m));
+render();
+</script>
+</body>
+</html>

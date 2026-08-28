@@ -28,6 +28,8 @@ impl CSharpScanner {
             language: Language::CSharp,
             elements,
             imports,
+            anchors: Vec::new(),
+            literals: Vec::new(),
         })
     }
 

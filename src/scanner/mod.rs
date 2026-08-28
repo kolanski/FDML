@@ -5,6 +5,8 @@ pub mod csharp;
 pub mod javascript;
 pub mod typescript;
 pub mod go_lang;
+pub mod c;
+pub mod rust_lang;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -58,12 +60,14 @@ pub fn scan_project(codebase_path: &str, exclude_patterns: &[String]) -> Result<
         let module_path = compute_module_path(&rel_path, language);
 
         let mut analysis = match language {
+            Language::C | Language::Cpp => c::CScanner::parse_file(&source, &rel_path, language.clone())?,
             Language::Python => python::PythonScanner::parse_file(&source, &rel_path)?,
             Language::Java => java::JavaScanner::parse_file(&source, &rel_path)?,
             Language::CSharp => csharp::CSharpScanner::parse_file(&source, &rel_path)?,
             Language::JavaScript => javascript::JavaScriptScanner::parse_file(&source, &rel_path)?,
             Language::TypeScript => typescript::TypeScriptScanner::parse_file(&source, &rel_path)?,
             Language::Go => go_lang::GoScanner::parse_file(&source, &rel_path)?,
+            Language::Rust => rust_lang::RustScanner::parse_file(&source, &rel_path)?,
         };
 
         analysis.module_path = module_path;
@@ -83,12 +87,15 @@ pub fn scan_project(codebase_path: &str, exclude_patterns: &[String]) -> Result<
 
     let languages: Vec<Language> = {
         let mut langs = Vec::new();
+        if languages_detected.contains("c") { langs.push(Language::C); }
+        if languages_detected.contains("cpp") { langs.push(Language::Cpp); }
         if languages_detected.contains("python") { langs.push(Language::Python); }
         if languages_detected.contains("java") { langs.push(Language::Java); }
         if languages_detected.contains("csharp") { langs.push(Language::CSharp); }
         if languages_detected.contains("javascript") { langs.push(Language::JavaScript); }
         if languages_detected.contains("typescript") { langs.push(Language::TypeScript); }
         if languages_detected.contains("go") { langs.push(Language::Go); }
+        if languages_detected.contains("rust") { langs.push(Language::Rust); }
         langs
     };
 
@@ -119,6 +126,10 @@ fn make_relative(base: &Path, abs_path: &str) -> String {
 /// Compute a language-appropriate module path from relative file path
 fn compute_module_path(rel_path: &str, language: &Language) -> String {
     match language {
+        Language::C | Language::Cpp => {
+            let stem = rel_path.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(rel_path);
+            stem.trim_start_matches("src/").replace('/', ".").replace('\\', ".")
+        }
         Language::Python => {
             // foo/bar/__init__.py → foo.bar
             // foo/bar/baz.py → foo.bar.baz
@@ -153,6 +164,11 @@ fn compute_module_path(rel_path: &str, language: &Language) -> String {
                 .trim_start_matches("pkg/")
                 .trim_end_matches(".go");
             stripped.replace('/', ".").replace('\\', ".")
+        }
+        Language::Rust => {
+            let stripped = rel_path.trim_start_matches("src/").trim_end_matches(".rs");
+            let module = stripped.replace('/', ".").replace('\\', ".");
+            module.trim_end_matches(".mod").trim_end_matches(".lib").trim_end_matches(".main").to_string()
         }
         Language::JavaScript | Language::TypeScript => {
             // Strip src/ prefix
@@ -395,7 +411,7 @@ fn count_elements(elements: &[CodeElement], stats: &mut ScanStatistics) {
             ElementType::Method => stats.methods += 1,
             ElementType::Interface => stats.interfaces += 1,
             ElementType::Enum => stats.enums += 1,
-            ElementType::Field | ElementType::Property => stats.fields += 1,
+            ElementType::Field | ElementType::Property | ElementType::Macro | ElementType::TypeAlias => stats.fields += 1,
             ElementType::Module => {}
         }
         count_elements(&el.children, stats);

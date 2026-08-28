@@ -43,6 +43,8 @@ impl GoScanner {
             language: Language::Go,
             elements,
             imports,
+            anchors: Vec::new(),
+            literals: Vec::new(),
         })
     }
 

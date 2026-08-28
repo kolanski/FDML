@@ -8,6 +8,7 @@ pub mod migration;
 pub mod scanner;
 pub mod linker;
 pub mod serve;
+pub mod index;
 
 pub use cli::{Cli, CommandRunner};
 pub use error::{FdmlError, Result};

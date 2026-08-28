@@ -10,7 +10,7 @@ fn test_fdml_version() {
     cmd.arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("fdml 0.2.0"));
+        .stdout(predicate::str::contains(concat!("fdml ", env!("CARGO_PKG_VERSION"))));
 }
 
 #[test]

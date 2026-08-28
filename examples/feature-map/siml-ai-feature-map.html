@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>FDML — Product Modelling Toolkit · Feature Value Map · Siml.ai</title>
+<style>
+  /* ── base tokens: borrowed from fdml-cli/src/view.html ────────────────── */
+  :root {
+    --bg:#f6f7f9; --panel:#ffffff; --ink:#1f2937; --dim:#6b7280; --line:#e5e7eb;
+    --accent:#3b82f6;
+    --mono:ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* tier color families (OST sticky tints on FDML hues:
+       feature purple / entity blue / system grey) */
+    --root-bg:#f5f0fd; --root-bd:#e4d7f8; --root-ink:#6b21a8; --root-num:#7c3aed; --root-dot:#a855f7;
+    --prod-bg:#eef5fe; --prod-bd:#d2e2fb; --prod-ink:#1e40af; --prod-dot:#3b82f6;
+    --sys-bg:#f1f2f4;  --sys-bd:#dcdfe4;  --sys-ink:#475569;  --sys-dot:#6b7280;
+    --bad:#dc2626;
+    --e-root:#c9b3f0;  /* connector: product → value root */
+    --e-prod:#aac6f0;  /* connector: system → product */
+    --e-code:#d5dbe3;  /* connector: code artifact → feature */
+  }
+  * { box-sizing:border-box; }
+  html { min-height:100%; }
+  html, body { margin:0; font:13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; color:var(--ink); }
+  body {
+    min-width:1240px; min-height:100vh;
+    background-color:var(--bg);
+    background-image:radial-gradient(circle, #e1e5eb 1px, transparent 1.2px);
+    background-size:24px 24px;
+  }
+
+  /* ── app chrome (viewer #top) ─────────────────────────────────────────── */
+  #top { height:52px; display:flex; align-items:center; gap:16px; padding:0 20px; background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:6; }
+  .brand { display:flex; align-items:center; gap:8px; letter-spacing:-.01em; white-space:nowrap; }
+  .brand .mark { width:20px; height:20px; border-radius:6px; background:var(--accent); color:#fff; font:700 12px/20px sans-serif; text-align:center; }
+  .brand b { font-weight:700; font-size:13.5px; }
+  .brand .dash { color:#cbd5e1; font-weight:400; }
+  .brand .bname { color:#475569; font-weight:600; }
+  .ws { display:flex; align-items:center; gap:8px; font-weight:600; white-space:nowrap; }
+  .ws .av { width:16px; height:16px; border-radius:4px; background:linear-gradient(135deg, #7c3aed, #3b82f6); }
+  #mode { display:flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; flex-shrink:0; }
+  #mode button { border:none; background:var(--panel); color:var(--dim); font-size:12px; font-weight:600; padding:6px 14px; cursor:pointer; white-space:nowrap; }
+  #mode button.on { background:var(--accent); color:#fff; cursor:default; }
+  #top .right { margin-left:auto; display:flex; align-items:center; gap:8px; }
+  .chip { display:inline-flex; align-items:center; gap:6px; background:#f8fafc; border:1px solid var(--line); color:#64748b; border-radius:999px; padding:3px 10px; font-size:10.5px; font-weight:600; white-space:nowrap; }
+  .chip.ok i { width:6px; height:6px; border-radius:50%; background:#22c55e; }
+  .chip.bad { background:#fef2f2; border-color:#fecaca; color:#b91c1c; }
+  .brand, .ws { flex-shrink:0; }
+  @media (max-width:1400px) { .chip.opt { display:none; } }
+
+  /* ── canvas: centered tree, whitespace is a feature ───────────────────── */
+  #canvas { position:relative; max-width:1420px; margin:0 auto; padding:28px 40px 128px; }
+  #edges { position:absolute; inset:0; z-index:0; pointer-events:none; }
+  .page-h, .tier { position:relative; z-index:1; }
+
+  .page-h { margin-bottom:40px; }
+  .page-h .sub { margin:0; color:var(--dim); font-size:12.5px; }
+  .page-h .sub em { font-style:normal; font-family:var(--mono); font-size:11.5px; color:#475569; background:#eef2f7; border-radius:5px; padding:1px 6px; }
+
+  .sw { display:inline-block; width:10px; height:10px; border-radius:3px; }
+  .sw.roots { background:var(--root-bg); border:1px solid var(--root-dot); }
+  .sw.product { background:var(--prod-bg); border:1px solid var(--prod-dot); }
+  .sw.system { background:var(--sys-bg); border:1px solid var(--sys-dot); }
+  .sw.bad { background:#fef2f2; border:1px dashed var(--bad); }
+  .sw.code { background:#fbfcfd; border:1px solid #cbd5e1; }
+
+  /* ── tier labels: quiet pills, centered over each level ───────────────── */
+  .tier { margin-bottom:104px; }
+  .tier:last-of-type { margin-bottom:16px; }
+  .tier-h { display:flex; width:max-content; margin:0 auto 20px; align-items:center; gap:8px; font-size:10.5px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; background:var(--bg); padding:3px 14px; border-radius:999px; }
+  .tier-h::before, .tier-h::after { content:''; width:14px; height:2px; background:currentColor; border-radius:2px; opacity:.55; }
+  .tier-h.roots { color:var(--root-ink); } .tier-h.product { color:var(--prod-ink); } .tier-h.system { color:var(--sys-ink); } .tier-h.code { color:#64748b; }
+  .tier-h .d { color:#94a3b8; font-weight:500; text-transform:none; letter-spacing:0; font-size:11px; }
+
+  /* ── beneficiary bands: subtle background, not boxes ──────────────────── */
+  .lanes { display:flex; justify-content:center; gap:24px; }
+  .band { background:rgba(148,163,184,.09); border-radius:20px; padding:30px 20px 20px; position:relative; }
+  .band.user { flex:3; max-width:820px; }
+  .band.biz { flex:2; max-width:560px; }
+  .band-h { position:absolute; top:10px; left:22px; right:22px; display:flex; align-items:center; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.09em; color:#94a3b8; }
+  .band-h .bn { margin-left:auto; background:rgba(255,255,255,.85); border:1px solid var(--line); color:#64748b; border-radius:999px; padding:0 8px; font-size:9.5px; letter-spacing:.02em; line-height:1.7; }
+  .band-cards { display:flex; gap:16px; align-items:stretch; height:100%; }
+  .band-cards .card { flex:1; min-width:0; }
+
+  /* ── sticky cards ─────────────────────────────────────────────────────── */
+  .card { position:relative; display:flex; flex-direction:column; border-radius:14px; box-shadow:0 1px 2px rgba(16,24,40,.04), 0 5px 14px rgba(16,24,40,.07); transition:transform .15s, box-shadow .15s, opacity .15s; }
+  .card:hover { transform:translateY(-2px); box-shadow:0 2px 4px rgba(16,24,40,.05), 0 10px 22px rgba(16,24,40,.11); }
+
+  /* value-path focus states */
+  .card.dimmed { opacity:.3; }
+  .card.root.lit { box-shadow:0 0 0 2px var(--root-dot), 0 8px 20px rgba(124,58,237,.18); }
+  .card.product.lit { box-shadow:0 0 0 2px var(--prod-dot), 0 8px 20px rgba(59,130,246,.16); }
+  .card.system.lit { box-shadow:0 0 0 2px var(--sys-dot), 0 8px 20px rgba(71,85,105,.16); }
+  .card.alarm.lit { box-shadow:0 0 0 2px var(--bad), 0 10px 24px rgba(220,38,38,.20); }
+  .card.alarm.spot { box-shadow:0 0 0 2px var(--bad), 0 12px 28px rgba(220,38,38,.24); transform:rotate(-1deg) translateY(-3px); }
+
+  /* level 1 — outcomes: biggest, metric is the hero */
+  .card.root { background:var(--root-bg); border:1px solid var(--root-bd); padding:16px 18px; }
+  .card.root h3 { margin:0; font-size:13px; font-weight:650; letter-spacing:-.01em; line-height:1.35; color:var(--root-ink); }
+  .hero { margin-top:12px; display:flex; align-items:baseline; gap:8px; }
+  .hero .num { font-size:28px; font-weight:750; letter-spacing:-.02em; line-height:1; color:var(--root-num); font-variant-numeric:tabular-nums; }
+  .hero .hz { font-size:11px; font-weight:600; color:#9d84c8; }
+  .mlabel { margin-top:4px; font-family:var(--mono); font-size:10px; color:#9d84c8; }
+  .card.root .stmt { margin:10px 0 0; padding-top:8px; border-top:1px solid rgba(107,33,168,.12); color:#7c6f96; font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  /* level 2 — product solutions: medium, quieter */
+  .prodrow { display:flex; justify-content:center; align-items:stretch; gap:16px; }
+  .prodrow .card { flex:0 1 232px; min-width:186px; }
+  .card.product { background:var(--prod-bg); border:1px solid var(--prod-bd); padding:12px 14px; }
+  .card.product h4, .card.system h4 { margin:0 0 4px; font-size:12.5px; font-weight:600; letter-spacing:-.01em; line-height:1.35; }
+  .card.product h4 { color:var(--prod-ink); }
+  .card.product code, .card.system code { font-family:var(--mono); font-size:10px; color:#8fa3c4; }
+
+  /* level 3 — system enablers: smallest, quietest */
+  .sysrow { display:flex; justify-content:center; align-items:stretch; gap:16px; }
+  .sysrow .card { flex:0 1 216px; min-width:176px; }
+  .card.system { background:var(--sys-bg); border:1px solid var(--sys-bd); padding:10px 14px; box-shadow:0 1px 2px rgba(16,24,40,.04), 0 3px 8px rgba(16,24,40,.05); }
+  .card.system h4 { color:var(--sys-ink); font-size:12px; }
+  .card.system code { color:#9aa3af; }
+  .minst { margin-top:8px; font-family:var(--mono); font-size:10px; color:var(--dim); }
+  .minst b { color:#374151; font-weight:700; }
+  .minst .tagi { margin-left:6px; background:#e7eaee; color:#94a3b8; border-radius:8px; padding:0 6px; font:600 8.5px/1.8 -apple-system, sans-serif; text-transform:uppercase; letter-spacing:.05em; }
+
+  /* level 4 — code artifacts: flat mono chips, not sticky cards */
+  .coderow { display:flex; flex-wrap:wrap; justify-content:center; gap:8px 10px; }
+  .codechip { font-family:var(--mono); font-size:10.5px; color:#475569; background:#fbfcfd; border:1px solid #e3e7ec; border-radius:7px; padding:5px 10px; white-space:nowrap; cursor:default; transition:box-shadow .15s, opacity .15s, border-color .15s, background .15s, transform .15s; }
+  .codechip:hover { border-color:#94a3b8; background:#fff; transform:translateY(-1px); }
+  .codechip.lit { border-color:#64748b; background:#fff; box-shadow:0 0 0 1.5px rgba(100,116,139,.25); }
+  .codechip.dimmed { opacity:.3; }
+
+  /* ── the broken root (2 findings) ─────────────────────────────────────── */
+  .card.alarm { background:#fef2f2; border:1.5px dashed #f6a5a5; padding:16px 18px; transform:rotate(-1deg); }
+  .card.alarm:hover { transform:rotate(-1deg) translateY(-2px); }
+  .card.alarm h3 { margin:0 0 4px; font-size:13px; font-weight:650; letter-spacing:-.01em; line-height:1.35; color:#991b1b; }
+  .card.alarm code { font-family:var(--mono); font-size:10px; color:#d38d8d; }
+  .alarm-strip { display:flex; align-items:flex-start; gap:6px; margin-top:10px; padding-top:9px; border-top:1px dashed #f3b8b8; color:#b91c1c; font-size:11px; line-height:1.4; font-weight:550; }
+  .alarm-strip svg { flex:none; margin-top:1.5px; }
+  .gap-strip { display:flex; align-items:flex-start; gap:6px; margin-top:8px; padding:6px 8px; border:1px dashed #f3b8b8; border-radius:7px; background:transparent; color:#c05353; font-size:11px; line-height:1.4; font-weight:550; }
+  .gap-strip i { flex:none; margin-top:2.5px; width:8px; height:8px; border-radius:50%; border:1.3px dashed #d97a7a; background:transparent; }
+  .lintpill { position:absolute; top:-9px; right:12px; background:#fff; border:1px solid #fecaca; color:#b91c1c; border-radius:9px; padding:0 7px; font:700 9px/1.8 -apple-system, sans-serif; text-transform:uppercase; letter-spacing:.05em; box-shadow:0 1px 3px rgba(16,24,40,.06); }
+
+  /* ── connectors: organic mind-map curves, colored by the tier they feed ── */
+  #edges .edge { fill:none; stroke-width:1.7; stroke-linecap:round; opacity:.9; transition:opacity .15s, stroke .15s, stroke-width .15s; }
+  #edges .e-root { stroke:var(--e-root); }
+  #edges .e-prod { stroke:var(--e-prod); }
+  #edges .e-root.hot { stroke:#8b5cf6; stroke-width:2.4; opacity:1; }
+  #edges .e-prod.hot { stroke:#3b82f6; stroke-width:2.4; opacity:1; }
+  #edges .e-code { stroke:var(--e-code); stroke-width:1.3; opacity:.85; }
+  #edges .e-code.hot { stroke:#64748b; stroke-width:2; opacity:1; }
+  #edges .edge.faded { opacity:.12; }
+  #edges .stubg { transition:opacity .15s; }
+  #edges .stubg.faded { opacity:.12; }
+  /* GAP: hollow ghost branch downward to nowhere (vs the upward '?' break) */
+  #edges .edge.ghost { stroke:#e8a1a1; stroke-dasharray:2 6; stroke-width:1.5; opacity:.7; }
+  #edges .ghostq { fill:none; stroke:#e8a1a1; stroke-width:1.2; stroke-dasharray:2 4; opacity:.7; }
+
+  /* ── legend (viewer .legend) + hover hint ─────────────────────────────── */
+  .legend { position:fixed; bottom:16px; left:20px; z-index:5; display:flex; align-items:center; gap:14px; background:rgba(255,255,255,.96); border:1px solid var(--line); border-radius:10px; padding:8px 14px; font-size:11px; color:var(--dim); box-shadow:0 1px 4px rgba(0,0,0,.06); }
+  .legend span { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+  .legend .lhint { color:#94a3b8; border-left:1px solid var(--line); padding-left:14px; }
+
+  /* ── Value Lint panel ─────────────────────────────────────────────────── */
+  .lintpanel { position:fixed; right:20px; bottom:16px; z-index:5; width:284px; background:rgba(255,255,255,.97); border:1px solid var(--line); border-radius:10px; box-shadow:0 4px 16px rgba(16,24,40,.08); font-size:11px; overflow:hidden; }
+  .lp-h { display:flex; align-items:center; gap:6px; padding:8px 12px; font-weight:700; font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:#475569; border-bottom:1px solid var(--line); background:#fafbfc; }
+  .lp-h svg { flex:none; }
+  .lp-n { margin-left:auto; background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; border-radius:9px; padding:0 7px; font-size:10px; }
+  .lp-item { display:block; width:100%; text-align:left; background:none; border:none; border-bottom:1px solid #f6f7f9; padding:9px 12px 10px; cursor:pointer; font:inherit; color:inherit; transition:background .15s; }
+  .lp-item:last-child { border-bottom:none; }
+  .lp-item:hover, .lp-item.pin { background:#fef2f2; }
+  .lp-item code { font-family:var(--mono); font-size:10.5px; color:#b91c1c; font-weight:600; display:block; margin-bottom:3px; }
+  .lp-k { display:inline-block; margin-right:5px; border-radius:7px; padding:0 6px; font:700 8.5px/1.8 -apple-system, sans-serif; text-transform:uppercase; letter-spacing:.05em; vertical-align:1px; }
+  .lp-k.vr { background:#fee2e2; border:1px solid #fecaca; color:#b91c1c; }
+  .lp-k.gap { background:transparent; border:1px dashed #e8a1a1; color:#c05353; }
+  .lp-t { color:#7f1d1d; line-height:1.4; }
+  .lp-m { display:block; margin-top:4px; font-family:var(--mono); font-size:10px; color:#d38d8d; }
+</style>
+</head>
+<body>
+
+<header id="top">
+  <div class="brand">
+    <span class="mark">F</span><b>FDML</b><span class="dash">—</span><span class="bname">Product Modelling Toolkit</span>
+  </div>
+  <div class="ws"><span class="av"></span>Siml.ai</div>
+  <div id="mode">
+    <button type="button">Tech</button><button type="button">Business</button><button type="button" class="on">Feature Value Map</button>
+  </div>
+  <div class="right">
+    <span class="chip opt">13 features</span>
+    <span class="chip opt">5 value roots</span>
+    <span class="chip ok"><i></i>12/13 trace to value</span>
+    <span class="chip">9 code artifacts · scan 2s</span>
+    <span class="chip bad">2 lint violations</span>
+  </div>
+</header>
+
+<main id="canvas">
+  <svg id="edges" aria-hidden="true"></svg>
+
+  <div class="page-h">
+    <p class="sub"><em>vision.fdml</em> — every feature traces upward to a value root: a beneficiary and a measurable outcome. Branches read upward: <em>realizes</em>. Code artifacts anchor the chain at the bottom.</p>
+  </div>
+
+  <!-- ── level 1: value roots (outcomes), grouped by beneficiary ─────────── -->
+  <section class="tier">
+    <div class="tier-h roots">Value roots<span class="d">outcomes — why the product exists</span></div>
+    <div class="lanes">
+      <div class="band user">
+        <div class="band-h">Beneficiary · user<span class="bn">3 outcomes</span></div>
+        <div class="band-cards">
+          <article class="card root" data-node="hours_not_months">
+            <h3>Simulation development in hours, not months</h3>
+            <div class="hero"><span class="num">×1&#8239;000</span></div>
+            <div class="mlabel">sim_speedup_factor</div>
+            <p class="stmt" title="Neural simulators replace months-long classical solver cycles">Neural simulators replace months-long classical solver cycles</p>
+          </article>
+          <article class="card root" data-node="real_time_digital_twins">
+            <h3>Interact with a live digital twin</h3>
+            <div class="hero"><span class="num">50</span><span class="hz">ms timestep</span></div>
+            <div class="mlabel">timestep_latency</div>
+            <p class="stmt" title="Simulation responds to input in real time — explore, don't queue jobs">Simulation responds to input in real time — explore, don't queue jobs</p>
+          </article>
+          <article class="card root" data-node="simulation_budget_cut">
+            <h3>Simulation without an HPC budget</h3>
+            <div class="hero"><span class="num">85%</span><span class="hz">cost cut</span></div>
+            <div class="mlabel">cost_reduction</div>
+            <p class="stmt" title="No cluster procurement, no license seats — cloud GPUs on demand">No cluster procurement, no license seats — cloud GPUs on demand</p>
+          </article>
+        </div>
+      </div>
+      <div class="band biz">
+        <div class="band-h">Beneficiary · business<span class="bn">1 outcome · 1 flagged</span></div>
+        <div class="band-cards">
+          <article class="card root" data-node="platform_adoption">
+            <h3>SaaS adoption of the platform</h3>
+            <div class="hero"><span class="hz">2&#8239;500 →</span><span class="num">10&#8239;000</span><span class="hz">/ 365d</span></div>
+            <div class="mlabel">active_users</div>
+            <p class="stmt" title="Web-based simulation as recurring SaaS">Web-based simulation as recurring SaaS</p>
+          </article>
+          <article class="card alarm" data-node="makers_and_creators" id="alarmCard">
+            <span class="lintpill">lint ×2</span>
+            <h3>Simulation for makers &amp; creators</h3>
+            <code>makers_and_creators</code>
+            <div class="alarm-strip">
+              <svg width="11" height="11" viewBox="0 0 12 12"><path d="M6 1 L11.4 10.6 H0.6 Z" fill="none" stroke="#dc2626" stroke-width="1.3" stroke-linejoin="round"/><rect x="5.45" y="4.4" width="1.1" height="3" rx=".5" fill="#dc2626"/><rect x="5.45" y="8.1" width="1.1" height="1.1" rx=".5" fill="#dc2626"/></svg>
+              <span>root without value — whose value? how measured?</span>
+            </div>
+            <div class="gap-strip">
+              <i></i>
+              <span>gap: 0 realizing features, 0 code artifacts — vision with no path to reality</span>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── level 2: product layer (solutions) ──────────────────────────────── -->
+  <section class="tier">
+    <div class="tier-h product">Product<span class="d">solutions — what users touch</span></div>
+    <div class="prodrow">
+      <article class="card product" data-node="model_engineer">
+        <h4>Model Engineer — visual training of neural simulators</h4>
+        <code>model_engineer</code>
+      </article>
+      <article class="card product" data-node="simulation_studio">
+        <h4>Simulation Studio — deploy &amp; drive digital twins</h4>
+        <code>simulation_studio</code>
+      </article>
+      <article class="card product" data-node="managed_gpu_cloud">
+        <h4>Managed GPU cloud (zero-setup HPC)</h4>
+        <code>managed_gpu_cloud</code>
+      </article>
+      <article class="card product" data-node="web_no_install">
+        <h4>Fully web-based, no installation</h4>
+        <code>web_no_install</code>
+      </article>
+    </div>
+  </section>
+
+  <!-- ── level 3: system layer (enablers) ────────────────────────────────── -->
+  <section class="tier">
+    <div class="tier-h system">System<span class="d">enablers — what makes it possible</span></div>
+    <div class="sysrow">
+      <article class="card system" data-node="neural_surrogate_training">
+        <h4>Neural surrogate training (PhysicsNeMo)</h4>
+        <code>neural_surrogate_training</code>
+      </article>
+      <article class="card system" data-node="realtime_inference_engine">
+        <h4>Low-latency inference runtime</h4>
+        <code>realtime_inference_engine</code>
+        <div class="minst">timestep_latency&nbsp;→&nbsp;<b>50&#8239;ms</b><span class="tagi">instrumental</span></div>
+      </article>
+      <article class="card system" data-node="unreal_render_pipeline">
+        <h4>Unreal Engine render pipeline</h4>
+        <code>unreal_render_pipeline</code>
+      </article>
+      <article class="card system" data-node="gpu_orchestration">
+        <h4>GPU job orchestration &amp; autoscaling</h4>
+        <code>gpu_orchestration</code>
+      </article>
+    </div>
+  </section>
+
+  <!-- ── level 4: code artifacts (fdml scan) ─────────────────────────────── -->
+  <section class="tier">
+    <div class="tier-h code">Code<span class="d">from fdml scan</span></div>
+    <div class="coderow">
+      <span class="codechip" data-node="engine/physicsnemo_bridge.py">engine/physicsnemo_bridge.py</span>
+      <span class="codechip" data-node="engine/training/losses.py">engine/training/losses.py</span>
+      <span class="codechip" data-node="apps/model-engineer/PipelineCanvas.tsx">apps/model-engineer/PipelineCanvas.tsx</span>
+      <span class="codechip" data-node="runtime/infer/stream.py">runtime/infer/stream.py</span>
+      <span class="codechip" data-node="studio/ws_session.ts">studio/ws_session.ts</span>
+      <span class="codechip" data-node="apps/studio/SceneView.tsx">apps/studio/SceneView.tsx</span>
+      <span class="codechip" data-node="studio/render/ue_bridge.cpp">studio/render/ue_bridge.cpp</span>
+      <span class="codechip" data-node="infra/gpu_scheduler.py">infra/gpu_scheduler.py</span>
+      <span class="codechip" data-node="apps/shell/router.tsx">apps/shell/router.tsx</span>
+    </div>
+  </section>
+</main>
+
+<aside class="legend">
+  <span><i class="sw roots"></i>value root · outcome</span>
+  <span><i class="sw product"></i>product</span>
+  <span><i class="sw system"></i>system</span>
+  <span><i class="sw code"></i>code artifact</span>
+  <span><i class="sw bad"></i>lint violation</span>
+  <span><svg width="20" height="14" viewBox="0 0 20 14"><path d="M3 1.5 C 3 8, 17 6, 17 12.5" fill="none" stroke="#c9b3f0" stroke-width="1.7" stroke-linecap="round"/></svg>branch = realizes, reads upward</span>
+  <span class="lhint">hover a feature to see its value path</span>
+</aside>
+
+<aside class="lintpanel">
+  <div class="lp-h">
+    <svg width="11" height="11" viewBox="0 0 12 12"><path d="M6 1 L11.4 10.6 H0.6 Z" fill="none" stroke="#dc2626" stroke-width="1.3" stroke-linejoin="round"/><rect x="5.45" y="4.4" width="1.1" height="3" rx=".5" fill="#dc2626"/><rect x="5.45" y="8.1" width="1.1" height="1.1" rx=".5" fill="#dc2626"/></svg>
+    Value Lint<span class="lp-n">2</span>
+  </div>
+  <button class="lp-item" type="button">
+    <code>makers_and_creators</code>
+    <span class="lp-k vr">value-root</span><span class="lp-t">root without value — whose value? how measured?</span>
+    <span class="lp-m">tagline promise — "for makers &amp; creators"</span>
+  </button>
+  <button class="lp-item" type="button">
+    <code>makers_and_creators</code>
+    <span class="lp-k gap">gap</span><span class="lp-t">0 realizing features, 0 code artifacts — vision with no path to reality</span>
+  </button>
+</aside>
+
+<script>
+(function () {
+  'use strict';
+  // child → parent, exactly the `realizes` edges of vision.fdml
+  var EDGES = [
+    ['model_engineer', 'hours_not_months'],
+    ['simulation_studio', 'real_time_digital_twins'],
+    ['simulation_studio', 'hours_not_months'],
+    ['managed_gpu_cloud', 'simulation_budget_cut'],
+    ['managed_gpu_cloud', 'hours_not_months'],
+    ['web_no_install', 'platform_adoption'],
+    ['web_no_install', 'simulation_budget_cut'],
+    ['neural_surrogate_training', 'model_engineer'],
+    ['realtime_inference_engine', 'simulation_studio'],
+    ['unreal_render_pipeline', 'simulation_studio'],
+    ['gpu_orchestration', 'managed_gpu_cloud'],
+    ['gpu_orchestration', 'model_engineer'],
+    // code artifacts → implemented feature (fdml scan)
+    ['engine/physicsnemo_bridge.py', 'neural_surrogate_training'],
+    ['engine/training/losses.py', 'neural_surrogate_training'],
+    ['runtime/infer/stream.py', 'realtime_inference_engine'],
+    ['studio/ws_session.ts', 'realtime_inference_engine'],
+    ['studio/render/ue_bridge.cpp', 'unreal_render_pipeline'],
+    ['infra/gpu_scheduler.py', 'gpu_orchestration'],
+    ['apps/model-engineer/PipelineCanvas.tsx', 'model_engineer'],
+    ['apps/studio/SceneView.tsx', 'simulation_studio'],
+    ['apps/shell/router.tsx', 'web_no_install']
+  ];
+  var ROOTS = { hours_not_months: 1, real_time_digital_twins: 1, simulation_budget_cut: 1, platform_adoption: 1, makers_and_creators: 1 };
+  var CODE = {
+    'engine/physicsnemo_bridge.py': 1, 'engine/training/losses.py': 1,
+    'apps/model-engineer/PipelineCanvas.tsx': 1, 'runtime/infer/stream.py': 1,
+    'studio/ws_session.ts': 1, 'apps/studio/SceneView.tsx': 1,
+    'studio/render/ue_bridge.cpp': 1, 'infra/gpu_scheduler.py': 1,
+    'apps/shell/router.tsx': 1
+  };
+  var ALARM_ID = 'makers_and_creators';
+
+  var NS = 'http://www.w3.org/2000/svg';
+  var canvas = document.getElementById('canvas');
+  var svg = document.getElementById('edges');
+  var cardEls = document.querySelectorAll('[data-node]');
+
+  // adjacency: UP = realizes (child → parents), DOWN = realized-by
+  var UP = {}, DOWN = {};
+  EDGES.forEach(function (e) {
+    (UP[e[0]] = UP[e[0]] || []).push(e[1]);
+    (DOWN[e[1]] = DOWN[e[1]] || []).push(e[0]);
+  });
+
+  function el(name, attrs) {
+    var n = document.createElementNS(NS, name);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    return n;
+  }
+
+  function draw() {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var w = canvas.scrollWidth, h = canvas.scrollHeight;
+    svg.setAttribute('width', w);
+    svg.setAttribute('height', h);
+    svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+
+    // measure card anchors relative to the canvas
+    var cr = canvas.getBoundingClientRect();
+    var box = {};
+    for (var i = 0; i < cardEls.length; i++) {
+      var r = cardEls[i].getBoundingClientRect();
+      box[cardEls[i].getAttribute('data-node')] = {
+        cx: r.left - cr.left + r.width / 2,
+        top: r.top - cr.top,
+        bot: r.bottom - cr.top,
+        w: r.width
+      };
+    }
+
+    // fan-out: spread multiple branch anchors across a card's edge,
+    // ordered by the far endpoint's x so branches never cross at the anchor
+    function offset(list, other, span) {
+      var sorted = list.slice().sort(function (a, b) { return box[a].cx - box[b].cx; });
+      var n = sorted.length, i = sorted.indexOf(other);
+      var step = Math.min(34, span / (n + 1));
+      return (i - (n - 1) / 2) * step;
+    }
+
+    // organic curves: parent card bottom → child card top
+    EDGES.forEach(function (e) {
+      var child = box[e[0]], parent = box[e[1]];
+      if (!child || !parent) return;
+      var px = parent.cx + offset(DOWN[e[1]], e[0], parent.w);
+      var cx = child.cx + offset(UP[e[0]], e[1], child.w);
+      var py = parent.bot + 2, cy = child.top - 2;
+      var k = Math.max(30, Math.min(130, (cy - py) * 0.55));
+      var p = el('path', {
+        d: 'M ' + px + ' ' + py + ' C ' + px + ' ' + (py + k) + ', ' + cx + ' ' + (cy - k) + ', ' + cx + ' ' + cy,
+        'class': 'edge ' + (CODE[e[0]] ? 'e-code' : ROOTS[e[1]] ? 'e-root' : 'e-prod')
+      });
+      p.setAttribute('data-e', e[0] + '>' + e[1]);
+      svg.appendChild(p);
+    });
+
+    // GAP ghost branch: the flagged root reaches DOWN at nothing —
+    // hollow dashed circle, no '?', deliberately fainter than the card
+    var mk = box[ALARM_ID];
+    if (mk) {
+      var g = el('g', { 'class': 'stubg' });
+      var x = mk.cx, y = mk.bot + 4;
+      g.appendChild(el('path', {
+        d: 'M ' + x + ' ' + y + ' C ' + x + ' ' + (y + 14) + ', ' + (x + 6) + ' ' + (y + 22) + ', ' + (x + 6) + ' ' + (y + 36),
+        'class': 'edge ghost'
+      }));
+      g.appendChild(el('circle', { cx: x + 6, cy: y + 47, r: 8.5, 'class': 'ghostq' }));
+      svg.appendChild(g);
+    }
+  }
+
+  // ── value-path focus: ancestors (realizes*) + descendants (realized-by*) ──
+  function closure(id, adj) {
+    var seen = {}, stack = [id];
+    while (stack.length) {
+      var n = stack.pop();
+      var next = adj[n] || [];
+      for (var i = 0; i < next.length; i++) {
+        if (!seen[next[i]]) { seen[next[i]] = 1; stack.push(next[i]); }
+      }
+    }
+    return seen;
+  }
+  function pathSet(id) {
+    var set = closure(id, UP), down = closure(id, DOWN), k;
+    set[id] = 1;
+    for (k in down) set[k] = 1;
+    return set;
+  }
+
+  function focus(set) {
+    var i;
+    for (i = 0; i < cardEls.length; i++) {
+      var id = cardEls[i].getAttribute('data-node');
+      cardEls[i].classList.toggle('lit', !!set && !!set[id]);
+      cardEls[i].classList.toggle('dimmed', !!set && !set[id]);
+    }
+    var paths = svg.querySelectorAll('path[data-e]');
+    for (i = 0; i < paths.length; i++) {
+      var ft = paths[i].getAttribute('data-e').split('>');
+      var hot = !!set && !!set[ft[0]] && !!set[ft[1]];
+      paths[i].classList.toggle('hot', hot);
+      paths[i].classList.toggle('faded', !!set && !hot);
+    }
+    var stub = svg.querySelector('.stubg');
+    if (stub) stub.classList.toggle('faded', !!set && !set[ALARM_ID]);
+  }
+
+  // ── hover any card → its full value path lights up ──
+  var pinned = false;
+  var alarmCard = document.getElementById('alarmCard');
+  var lintItems = document.querySelectorAll('.lp-item');
+
+  function spotlight(on) {
+    focus(on ? pathSet(ALARM_ID) : null);
+    alarmCard.classList.toggle('spot', on);
+    for (var i = 0; i < lintItems.length; i++) {
+      lintItems[i].classList.toggle('pin', on && pinned);
+    }
+  }
+
+  for (var i = 0; i < cardEls.length; i++) {
+    (function (c) {
+      c.addEventListener('mouseenter', function () { focus(pathSet(c.getAttribute('data-node'))); });
+      c.addEventListener('mouseleave', function () { pinned ? spotlight(true) : focus(null); });
+    })(cardEls[i]);
+  }
+
+  // ── Value Lint panel: hover previews, click pins the spotlight ──
+  for (var j = 0; j < lintItems.length; j++) {
+    (function (item) {
+      item.addEventListener('mouseenter', function () { spotlight(true); });
+      item.addEventListener('mouseleave', function () { if (!pinned) spotlight(false); });
+      item.addEventListener('click', function () { pinned = !pinned; spotlight(pinned); });
+    })(lintItems[j]);
+  }
+
+  window.addEventListener('resize', draw);
+  window.addEventListener('load', draw);
+  draw();
+
+  // deep-link demo state: #path=<feature_id or artifact path> pre-lights a value path
+  var m = /^#path=(.+)$/.exec(decodeURIComponent(location.hash));
+  if (m) {
+    var did = m[1];
+    if (UP[did] || DOWN[did] || did === ALARM_ID) {
+      window.addEventListener('load', function () {
+        if (did === ALARM_ID) { spotlight(true); } else { focus(pathSet(did)); }
+      });
+    }
+  }
+})();
+</script>
+</body>
+</html>

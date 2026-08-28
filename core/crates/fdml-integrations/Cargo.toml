@@ -1,0 +1,14 @@
+[package]
+name = "fdml-integrations"
+version = "0.1.0"
+edition = "2021"
+description = "FDML core rework — pass 5: cross-system integrations + shared entities"
+
+[dependencies]
+fdml-types = { workspace = true }
+fdml-util = { workspace = true }
+
+[dev-dependencies]
+fdml-scan = { workspace = true }
+fdml-graph = { workspace = true }
+tempfile = "3"

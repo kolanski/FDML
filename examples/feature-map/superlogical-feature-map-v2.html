@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>FDML — Product Modelling Toolkit · Feature Value Map · Superlogical</title>
+<style>
+  /* ── base tokens: borrowed from fdml-cli/src/view.html ────────────────── */
+  :root {
+    --bg:#f6f7f9; --panel:#ffffff; --ink:#1f2937; --dim:#6b7280; --line:#e5e7eb;
+    --accent:#3b82f6;
+    --mono:ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* tier color families (OST sticky tints on FDML hues:
+       feature purple / entity blue / system grey) */
+    --root-bg:#f5f0fd; --root-bd:#e4d7f8; --root-ink:#6b21a8; --root-num:#7c3aed; --root-dot:#a855f7;
+    --prod-bg:#eef5fe; --prod-bd:#d2e2fb; --prod-ink:#1e40af; --prod-dot:#3b82f6;
+    --sys-bg:#f1f2f4;  --sys-bd:#dcdfe4;  --sys-ink:#475569;  --sys-dot:#6b7280;
+    --bad:#dc2626;
+    --e-root:#c9b3f0;  /* connector: product → value root */
+    --e-prod:#aac6f0;  /* connector: system → product */
+    --e-code:#d5dbe3;  /* connector: code artifact → feature */
+  }
+  * { box-sizing:border-box; }
+  html { min-height:100%; }
+  html, body { margin:0; font:13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; color:var(--ink); }
+  body {
+    min-width:1240px; min-height:100vh;
+    background-color:var(--bg);
+    background-image:radial-gradient(circle, #e1e5eb 1px, transparent 1.2px);
+    background-size:24px 24px;
+  }
+
+  /* ── app chrome (viewer #top) ─────────────────────────────────────────── */
+  #top { height:52px; display:flex; align-items:center; gap:16px; padding:0 20px; background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:6; }
+  .brand { display:flex; align-items:center; gap:8px; letter-spacing:-.01em; white-space:nowrap; }
+  .brand .mark { width:20px; height:20px; border-radius:6px; background:var(--accent); color:#fff; font:700 12px/20px sans-serif; text-align:center; }
+  .brand b { font-weight:700; font-size:13.5px; }
+  .brand .dash { color:#cbd5e1; font-weight:400; }
+  .brand .bname { color:#475569; font-weight:600; }
+  .ws { display:flex; align-items:center; gap:8px; font-weight:600; white-space:nowrap; }
+  .ws .av { width:16px; height:16px; border-radius:4px; background:linear-gradient(135deg, #7c3aed, #3b82f6); }
+  .ws .wsf { color:var(--dim); font-weight:500; font-family:var(--mono); font-size:11px; }
+  #mode { display:flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; flex-shrink:0; }
+  #mode button { border:none; background:var(--panel); color:var(--dim); font-size:12px; font-weight:600; padding:6px 14px; cursor:pointer; white-space:nowrap; }
+  #mode button.on { background:var(--accent); color:#fff; cursor:default; }
+  #top .right { margin-left:auto; display:flex; align-items:center; gap:8px; }
+  .chip { display:inline-flex; align-items:center; gap:6px; background:#f8fafc; border:1px solid var(--line); color:#64748b; border-radius:999px; padding:3px 10px; font-size:10.5px; font-weight:600; white-space:nowrap; }
+  .chip.ok i { width:6px; height:6px; border-radius:50%; background:#22c55e; }
+  .chip.bad { background:#fef2f2; border-color:#fecaca; color:#b91c1c; }
+  .brand, .ws { flex-shrink:0; }
+  @media (max-width:1400px) { .chip.opt { display:none; } }
+
+  /* ── canvas: centered tree, whitespace is a feature ───────────────────── */
+  #canvas { position:relative; max-width:1420px; margin:0 auto; padding:28px 40px 128px; }
+  #edges { position:absolute; inset:0; z-index:0; pointer-events:none; }
+  .page-h, .tier { position:relative; z-index:1; }
+
+  .page-h { margin-bottom:40px; }
+  .page-h .sub { margin:0; color:var(--dim); font-size:12.5px; }
+  .page-h .sub em { font-style:normal; font-family:var(--mono); font-size:11.5px; color:#475569; background:#eef2f7; border-radius:5px; padding:1px 6px; }
+
+  .sw { display:inline-block; width:10px; height:10px; border-radius:3px; }
+  .sw.roots { background:var(--root-bg); border:1px solid var(--root-dot); }
+  .sw.product { background:var(--prod-bg); border:1px solid var(--prod-dot); }
+  .sw.system { background:var(--sys-bg); border:1px solid var(--sys-dot); }
+  .sw.bad { background:#fef2f2; border:1px dashed var(--bad); }
+  .sw.code { background:#fbfcfd; border:1px solid #cbd5e1; }
+
+  /* ── tier labels: quiet pills, centered over each level ───────────────── */
+  .tier { margin-bottom:104px; }
+  .tier:last-of-type { margin-bottom:16px; }
+  .tier-h { display:flex; width:max-content; margin:0 auto 20px; align-items:center; gap:8px; font-size:10.5px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; background:var(--bg); padding:3px 14px; border-radius:999px; }
+  .tier-h::before, .tier-h::after { content:''; width:14px; height:2px; background:currentColor; border-radius:2px; opacity:.55; }
+  .tier-h.roots { color:var(--root-ink); } .tier-h.product { color:var(--prod-ink); } .tier-h.system { color:var(--sys-ink); } .tier-h.code { color:#64748b; }
+  .tier-h .d { color:#94a3b8; font-weight:500; text-transform:none; letter-spacing:0; font-size:11px; }
+
+  /* ── beneficiary bands: subtle background, not boxes ──────────────────── */
+  .lanes { display:flex; justify-content:center; gap:24px; }
+  .band { background:rgba(148,163,184,.09); border-radius:20px; padding:30px 20px 20px; position:relative; }
+  .band.user { flex:4; max-width:1030px; }
+  .band.biz { flex:1.08; max-width:284px; }
+  .band-h { position:absolute; top:10px; left:22px; right:22px; display:flex; align-items:center; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.09em; color:#94a3b8; }
+  .band-h .bn { margin-left:auto; background:rgba(255,255,255,.85); border:1px solid var(--line); color:#64748b; border-radius:999px; padding:0 8px; font-size:9.5px; letter-spacing:.02em; line-height:1.7; }
+  .band-cards { display:flex; gap:16px; align-items:stretch; height:100%; }
+  .band-cards .card { flex:1; min-width:0; }
+
+  /* ── sticky cards ─────────────────────────────────────────────────────── */
+  .card { position:relative; display:flex; flex-direction:column; border-radius:14px; box-shadow:0 1px 2px rgba(16,24,40,.04), 0 5px 14px rgba(16,24,40,.07); transition:transform .15s, box-shadow .15s, opacity .15s; }
+  .card:hover { transform:translateY(-2px); box-shadow:0 2px 4px rgba(16,24,40,.05), 0 10px 22px rgba(16,24,40,.11); }
+
+  /* value-path focus states */
+  .card.dimmed { opacity:.3; }
+  .card.root.lit { box-shadow:0 0 0 2px var(--root-dot), 0 8px 20px rgba(124,58,237,.18); }
+  .card.product.lit { box-shadow:0 0 0 2px var(--prod-dot), 0 8px 20px rgba(59,130,246,.16); }
+  .card.system.lit { box-shadow:0 0 0 2px var(--sys-dot), 0 8px 20px rgba(71,85,105,.16); }
+  .card.alarm.lit { box-shadow:0 0 0 2px var(--bad), 0 10px 24px rgba(220,38,38,.20); }
+  .card.alarm.spot { box-shadow:0 0 0 2px var(--bad), 0 12px 28px rgba(220,38,38,.24); transform:rotate(-1deg) translateY(-3px); }
+
+  /* level 1 — outcomes: biggest, metric is the hero */
+  .card.root { background:var(--root-bg); border:1px solid var(--root-bd); padding:16px 18px; }
+  .card.root h3 { margin:0; font-size:13px; font-weight:650; letter-spacing:-.01em; line-height:1.35; color:var(--root-ink); }
+  .hero { margin-top:12px; display:flex; align-items:baseline; gap:8px; }
+  .hero .num { font-size:28px; font-weight:750; letter-spacing:-.02em; line-height:1; color:var(--root-num); font-variant-numeric:tabular-nums; }
+  .hero .hz { font-size:11px; font-weight:600; color:#9d84c8; }
+  .hero .tbd { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:#b45309; background:#fef3c7; border:1px solid #fde68a; border-radius:8px; padding:1px 7px; align-self:center; }
+  .mlabel { margin-top:4px; font-family:var(--mono); font-size:10px; color:#9d84c8; }
+  .card.root .stmt { margin:10px 0 0; padding-top:8px; border-top:1px solid rgba(107,33,168,.12); color:#7c6f96; font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  /* level 2 — product solutions: medium, quieter */
+  .prodrow { display:flex; justify-content:center; align-items:stretch; gap:16px; }
+  .prodrow .card { flex:0 1 216px; min-width:176px; }
+  .card.product { background:var(--prod-bg); border:1px solid var(--prod-bd); padding:12px 14px; }
+  .card.product h4, .card.system h4 { margin:0 0 4px; font-size:12.5px; font-weight:600; letter-spacing:-.01em; line-height:1.35; }
+  .card.product h4 { color:var(--prod-ink); }
+  .card.product code, .card.system code { font-family:var(--mono); font-size:10px; color:#8fa3c4; }
+
+  /* level 3 — system enablers: smallest, quietest */
+  .sysrow { display:flex; justify-content:center; gap:180px; }
+  .sysrow .card { flex:0 1 208px; }
+  .card.system { background:var(--sys-bg); border:1px solid var(--sys-bd); padding:10px 14px; box-shadow:0 1px 2px rgba(16,24,40,.04), 0 3px 8px rgba(16,24,40,.05); }
+  .card.system h4 { color:var(--sys-ink); font-size:12px; }
+  .card.system code { color:#9aa3af; }
+  .minst { margin-top:8px; font-family:var(--mono); font-size:10px; color:var(--dim); }
+  .minst b { color:#374151; font-weight:700; }
+  .minst .tagi { margin-left:6px; background:#e7eaee; color:#94a3b8; border-radius:8px; padding:0 6px; font:600 8.5px/1.8 -apple-system, sans-serif; text-transform:uppercase; letter-spacing:.05em; }
+
+  /* level 4 — code artifacts: flat mono chips, not sticky cards */
+  .coderow { display:flex; flex-wrap:wrap; justify-content:center; gap:8px 10px; }
+  .codechip { font-family:var(--mono); font-size:10.5px; color:#475569; background:#fbfcfd; border:1px solid #e3e7ec; border-radius:7px; padding:5px 10px; white-space:nowrap; cursor:default; transition:box-shadow .15s, opacity .15s, border-color .15s, background .15s, transform .15s; }
+  .codechip:hover { border-color:#94a3b8; background:#fff; transform:translateY(-1px); }
+  .codechip.lit { border-color:#64748b; background:#fff; box-shadow:0 0 0 1.5px rgba(100,116,139,.25); }
+  .codechip.dimmed { opacity:.3; }
+
+  /* ── the broken branch ────────────────────────────────────────────────── */
+  .card.alarm { background:#fef2f2; border:1.5px dashed #f6a5a5; padding:12px 14px; margin-left:44px; transform:rotate(-1deg); }
+  .card.alarm:hover { transform:rotate(-1deg) translateY(-2px); }
+  .card.alarm h4 { margin:0 0 4px; font-size:12.5px; font-weight:600; line-height:1.35; color:#991b1b; }
+  .card.alarm code { font-family:var(--mono); font-size:10px; color:#d38d8d; }
+  .alarm-strip { display:flex; align-items:flex-start; gap:6px; margin-top:8px; padding-top:8px; border-top:1px dashed #f3b8b8; color:#b91c1c; font-size:11px; line-height:1.4; font-weight:550; }
+  .alarm-strip svg { flex:none; margin-top:1.5px; }
+  .lintpill { position:absolute; top:-9px; right:12px; background:#fff; border:1px solid #fecaca; color:#b91c1c; border-radius:9px; padding:0 7px; font:700 9px/1.8 -apple-system, sans-serif; text-transform:uppercase; letter-spacing:.05em; box-shadow:0 1px 3px rgba(16,24,40,.06); }
+
+  /* ── connectors: organic mind-map curves, colored by the tier they feed ── */
+  #edges .edge { fill:none; stroke-width:1.7; stroke-linecap:round; opacity:.9; transition:opacity .15s, stroke .15s, stroke-width .15s; }
+  #edges .e-root { stroke:var(--e-root); }
+  #edges .e-prod { stroke:var(--e-prod); }
+  #edges .e-root.hot { stroke:#8b5cf6; stroke-width:2.4; opacity:1; }
+  #edges .e-prod.hot { stroke:#3b82f6; stroke-width:2.4; opacity:1; }
+  #edges .e-code { stroke:var(--e-code); stroke-width:1.3; opacity:.85; }
+  #edges .e-code.hot { stroke:#64748b; stroke-width:2; opacity:1; }
+  #edges .edge.faded { opacity:.12; }
+  #edges .stubg { transition:opacity .15s; }
+  #edges .stubg.faded { opacity:.12; }
+  #edges .edge.bad { stroke:var(--bad); stroke-dasharray:3 5; stroke-width:1.5; opacity:.7; }
+  #edges .badq { fill:#fff; stroke:var(--bad); stroke-width:1.2; stroke-dasharray:2 3; }
+  #edges .badt { fill:var(--bad); font:700 11px -apple-system, sans-serif; }
+
+  /* ── legend (viewer .legend) + hover hint ─────────────────────────────── */
+  .legend { position:fixed; bottom:16px; left:20px; z-index:5; display:flex; align-items:center; gap:14px; background:rgba(255,255,255,.96); border:1px solid var(--line); border-radius:10px; padding:8px 14px; font-size:11px; color:var(--dim); box-shadow:0 1px 4px rgba(0,0,0,.06); }
+  .legend span { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+  .legend .lhint { color:#94a3b8; border-left:1px solid var(--line); padding-left:14px; }
+
+  /* ── Value Lint panel ─────────────────────────────────────────────────── */
+  .lintpanel { position:fixed; right:20px; bottom:16px; z-index:5; width:276px; background:rgba(255,255,255,.97); border:1px solid var(--line); border-radius:10px; box-shadow:0 4px 16px rgba(16,24,40,.08); font-size:11px; overflow:hidden; }
+  .lp-h { display:flex; align-items:center; gap:6px; padding:8px 12px; font-weight:700; font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:#475569; border-bottom:1px solid var(--line); background:#fafbfc; }
+  .lp-h svg { flex:none; }
+  .lp-n { margin-left:auto; background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; border-radius:9px; padding:0 7px; font-size:10px; }
+  .lp-item { display:block; width:100%; text-align:left; background:none; border:none; padding:9px 12px 10px; cursor:pointer; font:inherit; color:inherit; transition:background .15s; }
+  .lp-item:hover, .lp-item.pin { background:#fef2f2; }
+  .lp-item code { font-family:var(--mono); font-size:10.5px; color:#b91c1c; font-weight:600; display:block; margin-bottom:2px; }
+  .lp-t { color:#7f1d1d; line-height:1.4; display:block; }
+  .lp-m { display:block; margin-top:4px; font-family:var(--mono); font-size:10px; color:#d38d8d; }
+</style>
+</head>
+<body>
+
+<header id="top">
+  <div class="brand">
+    <span class="mark">F</span><b>FDML</b><span class="dash">—</span><span class="bname">Product Modelling Toolkit</span>
+  </div>
+  <div class="ws"><span class="av"></span>Superlogical</div>
+  <div id="mode">
+    <button type="button">Tech</button><button type="button">Business</button><button type="button" class="on">Feature Value Map</button>
+  </div>
+  <div class="right">
+    <span class="chip opt">12 features</span>
+    <span class="chip opt">5 value roots</span>
+    <span class="chip ok"><i></i>11/12 trace to value</span>
+    <span class="chip">8 code artifacts · scan 2s</span>
+    <span class="chip bad">1 lint violation</span>
+  </div>
+</header>
+
+<main id="canvas">
+  <svg id="edges" aria-hidden="true"></svg>
+
+  <div class="page-h">
+    <p class="sub"><em>vision.fdml</em> — every feature traces upward to a value root: a beneficiary and a measurable outcome. Branches read upward: <em>realizes</em>. Code artifacts anchor the chain at the bottom.</p>
+  </div>
+
+  <!-- ── level 1: value roots (outcomes), grouped by beneficiary ─────────── -->
+  <section class="tier">
+    <div class="tier-h roots">Value roots<span class="d">outcomes — why the product exists</span></div>
+    <div class="lanes">
+      <div class="band user">
+        <div class="band-h">Beneficiary · user<span class="bn">4 outcomes</span></div>
+        <div class="band-cards">
+          <article class="card root" data-node="never_lose_work_context">
+            <h3>Work survives disconnects, reboots, device switches</h3>
+            <div class="hero"><span class="num">99.9%</span></div>
+            <div class="mlabel">reconnect_success_rate</div>
+            <p class="stmt" title="A session is durable: drop wifi, close laptop, reconnect — everything is where you left it">A session is durable: drop wifi, close laptop, reconnect — everything is where you left it</p>
+          </article>
+          <article class="card root" data-node="work_from_any_device">
+            <h3>Same session from web, macOS, iOS</h3>
+            <div class="hero"><span class="num">40%</span></div>
+            <div class="mlabel">multi_device_weekly_share</div>
+            <p class="stmt" title="Start at the desk, continue from the phone">Start at the desk, continue from the phone</p>
+          </article>
+          <article class="card root" data-node="collaborate_live">
+            <h3>Share a live session with a teammate</h3>
+            <div class="hero"><span class="num">—</span><span class="tbd">no target yet</span></div>
+            <div class="mlabel">shared_sessions_weekly</div>
+            <p class="stmt" title="Debugging together without screen-share latency or 'can you paste that'">Debugging together without screen-share latency or 'can you paste that'</p>
+          </article>
+          <article class="card root" data-node="daily_driver_quality">
+            <h3>Better than tmux for everyday use</h3>
+            <div class="hero"><span class="num">60%</span></div>
+            <div class="mlabel">daily_active_ratio</div>
+            <p class="stmt" title="Scrollback, selection, scrolling feel native — no muscle-memory tax">Scrollback, selection, scrolling feel native — no muscle-memory tax</p>
+          </article>
+        </div>
+      </div>
+      <div class="band biz">
+        <div class="band-h">Beneficiary · business<span class="bn">1 outcome</span></div>
+        <div class="band-cards">
+          <article class="card root" data-node="developer_adoption">
+            <h3>Developers adopt the multiplexer as the wedge</h3>
+            <div class="hero"><span class="num">10&#8239;000</span><span class="hz">/ 365d</span></div>
+            <div class="mlabel">weekly_active_devs</div>
+            <p class="stmt" title="The terminal is the trojan horse for 'multiplexer for all work'">The terminal is the trojan horse for 'multiplexer for all work'</p>
+          </article>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── level 2: product layer (solutions) ──────────────────────────────── -->
+  <section class="tier">
+    <div class="tier-h product">Product<span class="d">solutions — what users touch</span></div>
+    <div class="prodrow">
+      <article class="card product" data-node="terminal_multiplexer">
+        <h4>Modern terminal multiplexer</h4>
+        <code>terminal_multiplexer</code>
+      </article>
+      <article class="card product" data-node="web_native_clients">
+        <h4>Web + native macOS/iOS clients</h4>
+        <code>web_native_clients</code>
+      </article>
+      <article class="card product" data-node="session_sharing">
+        <h4>Built-in session sharing</h4>
+        <code>session_sharing</code>
+      </article>
+      <article class="card product" data-node="modern_scrollback_ux">
+        <h4>Scrollback / selection / scrolling UX</h4>
+        <code>modern_scrollback_ux</code>
+      </article>
+      <article class="card alarm" data-node="ai_agent_multiplexing" id="alarmCard">
+        <span class="lintpill">lint · value-root</span>
+        <h4>Multiplex AI agents alongside interactive work</h4>
+        <code>ai_agent_multiplexing</code>
+        <div class="alarm-strip">
+          <svg width="11" height="11" viewBox="0 0 12 12"><path d="M6 1 L11.4 10.6 H0.6 Z" fill="none" stroke="#dc2626" stroke-width="1.3" stroke-linejoin="round"/><rect x="5.45" y="4.4" width="1.1" height="3" rx=".5" fill="#dc2626"/><rect x="5.45" y="8.1" width="1.1" height="1.1" rx=".5" fill="#dc2626"/></svg>
+          <span>root without value — whose value? how measured?</span>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ── level 3: system layer (enablers) ────────────────────────────────── -->
+  <section class="tier">
+    <div class="tier-h system">System<span class="d">enablers — what makes it possible</span></div>
+    <div class="sysrow">
+      <article class="card system" data-node="session_persistence_engine">
+        <h4>Server-side session persistence</h4>
+        <code>session_persistence_engine</code>
+        <div class="minst">reconnect_latency&nbsp;→&nbsp;<b>200&#8239;ms</b><span class="tagi">instrumental</span></div>
+      </article>
+      <article class="card system" data-node="realtime_sync_protocol">
+        <h4>Real-time multi-client sync protocol</h4>
+        <code>realtime_sync_protocol</code>
+      </article>
+    </div>
+  </section>
+
+  <!-- ── level 4: code artifacts (fdml scan) ─────────────────────────────── -->
+  <section class="tier">
+    <div class="tier-h code">Code<span class="d">from fdml scan</span></div>
+    <div class="coderow">
+      <span class="codechip" data-node="core/mux/pty.rs">core/mux/pty.rs</span>
+      <span class="codechip" data-node="clients/web/term.tsx">clients/web/term.tsx</span>
+      <span class="codechip" data-node="clients/ios/TerminalView.swift">clients/ios/TerminalView.swift</span>
+      <span class="codechip" data-node="core/session/store.rs">core/session/store.rs</span>
+      <span class="codechip" data-node="core/session/resume.rs">core/session/resume.rs</span>
+      <span class="codechip" data-node="sync/share/session_acl.rs">sync/share/session_acl.rs</span>
+      <span class="codechip" data-node="sync/protocol.rs">sync/protocol.rs</span>
+      <span class="codechip" data-node="clients/shared/sync.ts">clients/shared/sync.ts</span>
+    </div>
+  </section>
+</main>
+
+<aside class="legend">
+  <span><i class="sw roots"></i>value root · outcome</span>
+  <span><i class="sw product"></i>product</span>
+  <span><i class="sw system"></i>system</span>
+  <span><i class="sw code"></i>code artifact</span>
+  <span><i class="sw bad"></i>lint violation</span>
+  <span><svg width="20" height="14" viewBox="0 0 20 14"><path d="M3 1.5 C 3 8, 17 6, 17 12.5" fill="none" stroke="#c9b3f0" stroke-width="1.7" stroke-linecap="round"/></svg>branch = realizes, reads upward</span>
+  <span class="lhint">hover a feature to see its value path</span>
+</aside>
+
+<aside class="lintpanel">
+  <div class="lp-h">
+    <svg width="11" height="11" viewBox="0 0 12 12"><path d="M6 1 L11.4 10.6 H0.6 Z" fill="none" stroke="#dc2626" stroke-width="1.3" stroke-linejoin="round"/><rect x="5.45" y="4.4" width="1.1" height="3" rx=".5" fill="#dc2626"/><rect x="5.45" y="8.1" width="1.1" height="1.1" rx=".5" fill="#dc2626"/></svg>
+    Value Lint<span class="lp-n">1</span>
+  </div>
+  <button class="lp-item" id="lintItem" type="button">
+    <code>ai_agent_multiplexing</code>
+    <span class="lp-t">root without value — whose value? how measured?</span>
+    <span class="lp-m">0 implementing artifacts — branch broken both ways</span>
+  </button>
+</aside>
+
+<script>
+(function () {
+  'use strict';
+  // child → parent, exactly the `realizes` edges of vision.fdml
+  var EDGES = [
+    ['terminal_multiplexer', 'never_lose_work_context'],
+    ['terminal_multiplexer', 'developer_adoption'],
+    ['web_native_clients', 'work_from_any_device'],
+    ['web_native_clients', 'daily_driver_quality'],
+    ['session_sharing', 'collaborate_live'],
+    ['modern_scrollback_ux', 'daily_driver_quality'],
+    ['session_persistence_engine', 'terminal_multiplexer'],
+    ['session_persistence_engine', 'session_sharing'],
+    ['realtime_sync_protocol', 'web_native_clients'],
+    ['realtime_sync_protocol', 'session_sharing'],
+    // code artifacts → implemented feature (fdml scan)
+    ['core/mux/pty.rs', 'terminal_multiplexer'],
+    ['clients/web/term.tsx', 'web_native_clients'],
+    ['clients/ios/TerminalView.swift', 'web_native_clients'],
+    ['core/session/store.rs', 'session_persistence_engine'],
+    ['core/session/resume.rs', 'session_persistence_engine'],
+    ['sync/share/session_acl.rs', 'session_sharing'],
+    ['sync/protocol.rs', 'realtime_sync_protocol'],
+    ['clients/shared/sync.ts', 'realtime_sync_protocol']
+  ];
+  var ROOTS = { never_lose_work_context: 1, work_from_any_device: 1, collaborate_live: 1, daily_driver_quality: 1, developer_adoption: 1 };
+  var CODE = {
+    'core/mux/pty.rs': 1, 'clients/web/term.tsx': 1, 'clients/ios/TerminalView.swift': 1,
+    'core/session/store.rs': 1, 'core/session/resume.rs': 1, 'sync/share/session_acl.rs': 1,
+    'sync/protocol.rs': 1, 'clients/shared/sync.ts': 1
+  };
+  var ALARM_ID = 'ai_agent_multiplexing';
+
+  var NS = 'http://www.w3.org/2000/svg';
+  var canvas = document.getElementById('canvas');
+  var svg = document.getElementById('edges');
+  var cardEls = document.querySelectorAll('[data-node]');
+
+  // adjacency: UP = realizes (child → parents), DOWN = realized-by
+  var UP = {}, DOWN = {};
+  EDGES.forEach(function (e) {
+    (UP[e[0]] = UP[e[0]] || []).push(e[1]);
+    (DOWN[e[1]] = DOWN[e[1]] || []).push(e[0]);
+  });
+
+  function el(name, attrs) {
+    var n = document.createElementNS(NS, name);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    return n;
+  }
+
+  function draw() {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var w = canvas.scrollWidth, h = canvas.scrollHeight;
+    svg.setAttribute('width', w);
+    svg.setAttribute('height', h);
+    svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+
+    // measure card anchors relative to the canvas
+    var cr = canvas.getBoundingClientRect();
+    var box = {};
+    for (var i = 0; i < cardEls.length; i++) {
+      var r = cardEls[i].getBoundingClientRect();
+      box[cardEls[i].getAttribute('data-node')] = {
+        cx: r.left - cr.left + r.width / 2,
+        top: r.top - cr.top,
+        bot: r.bottom - cr.top,
+        w: r.width
+      };
+    }
+
+    // fan-out: spread multiple branch anchors across a card's edge,
+    // ordered by the far endpoint's x so branches never cross at the anchor
+    function offset(list, other, span) {
+      var sorted = list.slice().sort(function (a, b) { return box[a].cx - box[b].cx; });
+      var n = sorted.length, i = sorted.indexOf(other);
+      var step = Math.min(34, span / (n + 1));
+      return (i - (n - 1) / 2) * step;
+    }
+
+    // organic curves: parent card bottom → child card top
+    EDGES.forEach(function (e) {
+      var child = box[e[0]], parent = box[e[1]];
+      if (!child || !parent) return;
+      var px = parent.cx + offset(DOWN[e[1]], e[0], parent.w);
+      var cx = child.cx + offset(UP[e[0]], e[1], child.w);
+      var py = parent.bot + 2, cy = child.top - 2;
+      var k = Math.max(30, Math.min(130, (cy - py) * 0.55));
+      var p = el('path', {
+        d: 'M ' + px + ' ' + py + ' C ' + px + ' ' + (py + k) + ', ' + cx + ' ' + (cy - k) + ', ' + cx + ' ' + cy,
+        'class': 'edge ' + (CODE[e[0]] ? 'e-code' : ROOTS[e[1]] ? 'e-root' : 'e-prod')
+      });
+      p.setAttribute('data-e', e[0] + '>' + e[1]);
+      svg.appendChild(p);
+    });
+
+    // broken branch: the dangling root reaches up at nothing
+    var ai = box[ALARM_ID];
+    if (ai) {
+      var g = el('g', { 'class': 'stubg' });
+      var x = ai.cx, y = ai.top - 4;
+      g.appendChild(el('path', {
+        d: 'M ' + x + ' ' + y + ' C ' + x + ' ' + (y - 16) + ', ' + (x + 5) + ' ' + (y - 24) + ', ' + (x + 5) + ' ' + (y - 38),
+        'class': 'edge bad'
+      }));
+      g.appendChild(el('circle', { cx: x + 5, cy: y - 51, r: 10, 'class': 'badq' }));
+      var t = el('text', { x: x + 5, y: y - 47, 'text-anchor': 'middle', 'class': 'badt' });
+      t.textContent = '?';
+      g.appendChild(t);
+      svg.appendChild(g);
+    }
+  }
+
+  // ── value-path focus: ancestors (realizes*) + descendants (realized-by*) ──
+  function closure(id, adj) {
+    var seen = {}, stack = [id];
+    while (stack.length) {
+      var n = stack.pop();
+      var next = adj[n] || [];
+      for (var i = 0; i < next.length; i++) {
+        if (!seen[next[i]]) { seen[next[i]] = 1; stack.push(next[i]); }
+      }
+    }
+    return seen;
+  }
+  function pathSet(id) {
+    var set = closure(id, UP), down = closure(id, DOWN), k;
+    set[id] = 1;
+    for (k in down) set[k] = 1;
+    return set;
+  }
+
+  function focus(set) {
+    var i;
+    for (i = 0; i < cardEls.length; i++) {
+      var id = cardEls[i].getAttribute('data-node');
+      cardEls[i].classList.toggle('lit', !!set && !!set[id]);
+      cardEls[i].classList.toggle('dimmed', !!set && !set[id]);
+    }
+    var paths = svg.querySelectorAll('path[data-e]');
+    for (i = 0; i < paths.length; i++) {
+      var ft = paths[i].getAttribute('data-e').split('>');
+      var hot = !!set && !!set[ft[0]] && !!set[ft[1]];
+      paths[i].classList.toggle('hot', hot);
+      paths[i].classList.toggle('faded', !!set && !hot);
+    }
+    var stub = svg.querySelector('.stubg');
+    if (stub) stub.classList.toggle('faded', !!set && !set[ALARM_ID]);
+  }
+
+  // ── hover any card → its full value path lights up ──
+  var pinned = false;
+  var alarmCard = document.getElementById('alarmCard');
+  var lintItem = document.getElementById('lintItem');
+
+  function spotlight(on) {
+    focus(on ? pathSet(ALARM_ID) : null);
+    alarmCard.classList.toggle('spot', on);
+    lintItem.classList.toggle('pin', on && pinned);
+  }
+
+  for (var i = 0; i < cardEls.length; i++) {
+    (function (c) {
+      c.addEventListener('mouseenter', function () { focus(pathSet(c.getAttribute('data-node'))); });
+      c.addEventListener('mouseleave', function () { pinned ? spotlight(true) : focus(null); });
+    })(cardEls[i]);
+  }
+
+  // ── Value Lint panel: hover previews, click pins the spotlight ──
+  lintItem.addEventListener('mouseenter', function () { spotlight(true); });
+  lintItem.addEventListener('mouseleave', function () { if (!pinned) spotlight(false); });
+  lintItem.addEventListener('click', function () { pinned = !pinned; spotlight(pinned); });
+
+  window.addEventListener('resize', draw);
+  window.addEventListener('load', draw);
+  draw();
+
+  // deep-link demo state: #path=<feature_id or artifact path> pre-lights a value path
+  var m = /^#path=(.+)$/.exec(decodeURIComponent(location.hash));
+  if (m) {
+    var did = m[1];
+    if (UP[did] || DOWN[did] || did === ALARM_ID) {
+      window.addEventListener('load', function () {
+        if (did === ALARM_ID) { spotlight(true); } else { focus(pathSet(did)); }
+      });
+    }
+  }
+})();
+</script>
+</body>
+</html>

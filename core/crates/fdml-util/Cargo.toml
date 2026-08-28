@@ -1,0 +1,7 @@
+[package]
+name = "fdml-util"
+version = "0.1.0"
+edition = "2021"
+description = "FDML core rework — shared pure helpers (name normalization, similarity)"
+
+[dependencies]

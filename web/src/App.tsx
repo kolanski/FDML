@@ -4,15 +4,12 @@ import { useSpec } from './hooks/useSpec';
 import { useLayout } from './hooks/useLayout';
 import { buildHierarchy } from './layout/buildHierarchy';
 import { analyzeHealth } from './layout/specHealth';
-import SpecView from './components/SpecView';
-import Canvas from './components/Canvas';
-import FlowsView from './components/FlowsView';
 import HealthPanel from './components/HealthPanel';
-import ArchitectureView from './components/ArchitectureView';
 import GenerationView from './components/GenerationView';
 import Toolbar from './components/toolbar/Toolbar';
+import { VIEW_BLOCKS, type ViewContext } from './views';
 
-export type ViewMode = 'spec' | 'graph' | 'flows' | 'architecture' | 'generation';
+export type ViewMode = string;
 
 export default function App() {
   const { spec, error, loading, refetch } = useSpec();
@@ -141,7 +138,6 @@ export default function App() {
   const activeSpec = drillSpec || spec;
   const activeHierarchy = drillHierarchy || hierarchy;
   const activeHealth = drillHealth || health;
-  const hasArchitecture = spec.systems.length > 0;
 
   const counts: Record<string, number> = {
     entity: activeSpec.entities.length,
@@ -152,6 +148,21 @@ export default function App() {
     system: spec.systems.length,
     integration: spec.integrations.length,
   };
+
+  // The whole contract between App and the view blocks. Blocks read only from this.
+  const ctx: ViewContext = {
+    spec: activeSpec,
+    platformSpec: spec,
+    hierarchy: activeHierarchy,
+    searchQuery,
+    nodes,
+    edges,
+    onDrillDown: handleDrillDown,
+  };
+  const tabs = VIEW_BLOCKS.filter((b) => !b.available || b.available(ctx)).map((b) => ({
+    id: b.id,
+    label: b.label,
+  }));
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
@@ -164,7 +175,7 @@ export default function App() {
         onHealthClick={() => setShowHealth(!showHealth)}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
-        hasArchitecture={hasArchitecture}
+        tabs={tabs}
       />
       {drillSpec && (
         <div style={{
@@ -185,18 +196,7 @@ export default function App() {
       )}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          {activeView === 'spec' && activeHierarchy && (
-            <SpecView spec={activeSpec} searchQuery={searchQuery} hierarchy={activeHierarchy} />
-          )}
-          {activeView === 'graph' && (
-            <Canvas initialNodes={nodes} initialEdges={edges} />
-          )}
-          {activeView === 'flows' && activeHierarchy && (
-            <FlowsView spec={activeSpec} inferredFlows={activeHierarchy.inferredFlows} />
-          )}
-          {activeView === 'architecture' && (
-            <ArchitectureView spec={spec} onDrillDown={handleDrillDown} />
-          )}
+          {(VIEW_BLOCKS.find((b) => b.id === activeView) ?? VIEW_BLOCKS[0]).render(ctx)}
         </div>
         {showHealth && activeHealth && (
           <HealthPanel
