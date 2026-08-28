@@ -1,0 +1,17 @@
+[package]
+name = "fdml-graph"
+version = "0.1.0"
+edition = "2021"
+description = "FDML core rework — pass 3: deterministic linker (ScanResult → LinkReport)"
+
+[dependencies]
+fdml-types = { workspace = true }
+fdml-util = { workspace = true }
+serde = { workspace = true }
+anyhow = { workspace = true }
+petgraph = { workspace = true }
+
+[dev-dependencies]
+fdml-scan = { workspace = true }
+serde_json = { workspace = true }
+tempfile = "3"

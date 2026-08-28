@@ -1,0 +1,14 @@
+[package]
+name = "fdml-discovery"
+version = "0.1.0"
+edition = "2021"
+description = "FDML core rework — pass 1: discover independent systems in a folder"
+
+[dependencies]
+fdml-types = { workspace = true }
+fdml-util = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

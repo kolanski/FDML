@@ -175,6 +175,27 @@ system:
 - **Evolution Support**: Safe migrations with rollback capabilities
 - **Single Source of Truth**: From business requirements to running code
 
+## 🧭 Navigator: index-first code navigation
+
+Point FDML at any repository (C, C++, Rust, Python, Java, C#, JS/TS, Go) and search
+it like you think, not like you grep:
+
+```bash
+fdml index .                                  # build/refresh the index (seconds; re-runs cost ~10ms)
+fdml search "wall collision" --path .         # concept or symbol -> file:line + the ~40 lines to read
+fdml search "world streaming" --flow          # + call chains from entry points down to the match
+fdml outline core.main.main                   # a 6000-line function -> labelled phases with ranges
+fdml impact collide_walls                     # callers / callees / tests
+fdml mark "vertex colors" src/formats/nfsu2.h:26   # teach it a concept it missed
+fdml log                                      # telemetry: hit-rate, failed queries, retry episodes
+```
+
+Honesty is built in: when nothing useful is found it says so (`⚠ no useful result —
+fall back to grep`) instead of returning noise; `--llm` optionally lets a local
+Ollama model pick from grep evidence. Everything lives in `<repo>/.fdml/` —
+per-project, disposable, never committed. Agents get the same flow via the
+`fdml-nav` skill (`.claude/skills/fdml-nav/`). Concept & roadmap: [docs/navigator.md](docs/navigator.md).
+
 ## 🚦 Getting Started
 
 1. **Read the Spec**: [FDML Specification v1.3](FDML-1.3-en.md)  

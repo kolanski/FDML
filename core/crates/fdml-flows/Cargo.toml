@@ -1,0 +1,16 @@
+[package]
+name = "fdml-flows"
+version = "0.1.0"
+edition = "2021"
+description = "FDML core rework — pass 4: deterministic data-flow reconstruction (LinkReport + DepGraph → flows)"
+
+[dependencies]
+fdml-types = { workspace = true }
+fdml-util = { workspace = true }
+petgraph = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+fdml-scan = { workspace = true }
+fdml-graph = { workspace = true }
+tempfile = "3"

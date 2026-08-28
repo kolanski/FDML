@@ -59,3 +59,9 @@ pip-delete-this-directory.txt
 *.temp
 .tmp/
 .temp/
+
+# Disposable navigation index (fdml index) — never committed by design
+.fdml/
+
+# Internal lab notes / research material — local only, never published
+research/

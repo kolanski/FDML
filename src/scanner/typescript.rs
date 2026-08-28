@@ -29,6 +29,8 @@ impl TypeScriptScanner {
             language: Language::TypeScript,
             elements,
             imports,
+            anchors: Vec::new(),
+            literals: Vec::new(),
         })
     }
 

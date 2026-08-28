@@ -273,6 +273,133 @@ pub enum Commands {
         #[arg(long)]
         chunk_strategy: Option<String>,
     },
+
+    /// Build or incrementally update the local code navigation index
+    Index {
+        /// Repository root to index
+        path: String,
+    },
+
+    /// Search symbols in the local index (run `fdml index` first)
+    Search {
+        query: String,
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+        /// Also show the call chains the best match takes part in
+        #[arg(long)]
+        flow: bool,
+        /// Experimental: when nothing useful is found, let a local LLM pick from grep evidence
+        #[arg(long)]
+        llm: bool,
+        /// Ollama model for --llm
+        #[arg(long, default_value = "hf.co/unsloth/gemma-4-E4B-it-qat-GGUF:UD-Q4_K_XL")]
+        model: String,
+        /// Ollama base URL for --llm
+        #[arg(long, default_value = "http://localhost:11434")]
+        ollama_url: String,
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Retrieve the smallest source range for a symbol
+    Get {
+        symbol: String,
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show search telemetry: hit-rate and accumulated failed queries (tooling-improvement cases)
+    Log {
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+        /// Failed queries to show
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Import or read facts produced by an external analyser (Frama-C, Joern, …)
+    Facts {
+        /// Symbol to read facts for; omit when importing
+        symbol: Option<String>,
+        /// Unified-schema JSON file to import
+        #[arg(long)]
+        import: Option<String>,
+        /// Provider name recorded with imported facts
+        #[arg(long, default_value = "external")]
+        provider: String,
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Segment a large function into retrievable phases (what it calls, where, why)
+    Outline {
+        symbol: String,
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show callers, callees, imports, implementations, and detected tests
+    Impact {
+        symbol: String,
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show local index statistics
+    Status {
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Remember that a query means a location (`fdml mark "world mesh" world.world_mesh`),
+    /// or, with no arguments, add local-LLM descriptions and search tags to indexed symbols
+    Mark {
+        /// Natural-language query to remember
+        query: Option<String>,
+        /// Symbol, file, or file:line the query should resolve to
+        symbol: Option<String>,
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+        /// Ollama model used for compact symbol descriptions
+        #[arg(long, default_value = "hf.co/unsloth/gemma-4-E4B-it-qat-GGUF:UD-Q4_K_XL")]
+        model: String,
+        /// Ollama base URL
+        #[arg(long, default_value = "http://localhost:11434")]
+        ollama_url: String,
+        /// Maximum symbols to mark in one run (0 marks every eligible symbol)
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        /// Re-mark symbols already marked with this model
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]

@@ -4,35 +4,44 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
+    C,
+    Cpp,
     Python,
     Java,
     CSharp,
     JavaScript,
     TypeScript,
     Go,
+    Rust,
 }
 
 impl Language {
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext {
+            "c" | "h" => Some(Language::C),
+            "cc" | "cpp" | "cxx" | "hpp" | "hh" => Some(Language::Cpp),
             "py" => Some(Language::Python),
             "java" => Some(Language::Java),
             "cs" => Some(Language::CSharp),
             "js" | "jsx" | "mjs" => Some(Language::JavaScript),
             "ts" | "tsx" => Some(Language::TypeScript),
             "go" => Some(Language::Go),
+            "rs" => Some(Language::Rust),
             _ => None,
         }
     }
 
     pub fn name(&self) -> &str {
         match self {
+            Language::C => "c",
+            Language::Cpp => "cpp",
             Language::Python => "python",
             Language::Java => "java",
             Language::CSharp => "csharp",
             Language::JavaScript => "javascript",
             Language::TypeScript => "typescript",
             Language::Go => "go",
+            Language::Rust => "rust",
         }
     }
 }
@@ -49,6 +58,10 @@ pub enum ElementType {
     Enum,
     Field,
     Property,
+    /// C/C++ preprocessor constant or function-like macro.
+    Macro,
+    /// A named alias for a type (`typedef`), not a type definition of its own.
+    TypeAlias,
 }
 
 /// Visibility/scope of a code element
@@ -141,6 +154,49 @@ pub struct FileAnalysis {
     pub language: Language,
     pub elements: Vec<CodeElement>,
     pub imports: Vec<ImportInfo>,
+    /// Navigation anchors inside oversized bodies. Not symbols — they exist so a
+    /// search can answer "which 40 lines do I read next?" Scanners that do not
+    /// produce them leave this empty.
+    #[serde(default)]
+    pub anchors: Vec<CodeAnchor>,
+    /// String literals with their use site. Kept out of the symbol table so they
+    /// never pollute symbol ranking.
+    #[serde(default)]
+    pub literals: Vec<CodeLiteral>,
+}
+
+/// A statement region worth navigating to, with every searchable feature the parse
+/// can offer. Features stay separate so they can be weighted, not blended into a blob.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CodeAnchor {
+    pub parent_symbol: String,
+    pub kind: String,
+    /// Best short handle, usually the first condition identifier
+    pub name: String,
+    pub line_start: usize,
+    pub line_end: usize,
+    pub depth: usize,
+    /// Nearest comment above the region
+    pub label: Option<String>,
+    /// Identifiers appearing in the region's condition
+    pub condition_ids: Vec<String>,
+    /// Functions called directly in the region
+    pub calls: Vec<String>,
+    /// Locals declared *with an initializer* — features of the anchor, never symbols
+    pub declared: Vec<String>,
+    /// String literals occurring in the region
+    pub literals: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CodeLiteral {
+    pub value: String,
+    pub line: usize,
+    /// cli_flag | format | asset | generic
+    pub kind: String,
+    /// comparison | printf_format | argument | generic
+    pub usage_kind: String,
+    pub parent_symbol: String,
 }
 
 /// A node in the module hierarchy tree

@@ -1,0 +1,25 @@
+[package]
+name = "fdml-cli"
+version = "0.1.0"
+edition = "2021"
+description = "FDML core rework — the binary; wires passes, knows the order"
+
+[[bin]]
+name = "fdml"
+path = "src/main.rs"
+
+[dependencies]
+fdml-types = { workspace = true }
+fdml-discovery = { workspace = true }
+fdml-scan = { workspace = true }
+fdml-graph = { workspace = true }
+fdml-assemble = { workspace = true }
+fdml-flows = { workspace = true }
+fdml-integrations = { workspace = true }
+fdml-enrich = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+# Embed the prebuilt React viewer (web/dist) into the binary — same pin as the root crate.
+rust-embed = "=8.7.0"

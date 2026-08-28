@@ -1,0 +1,42 @@
+# FDML core rework — isolated workspace. Old crate at repo root is untouched (reference to lift from).
+[workspace]
+resolver = "2"
+members = [
+    "crates/fdml-types",
+    "crates/fdml-util",
+    "crates/fdml-discovery",
+    "crates/fdml-scan",
+    "crates/fdml-graph",
+    "crates/fdml-flows",
+    "crates/fdml-integrations",
+    "crates/fdml-assemble",
+    "crates/fdml-enrich",
+    "crates/fdml-cli",
+]
+
+# Versions pinned to match the root crate (reproducible builds; mikesb on Windows / Rust 1.86).
+[workspace.dependencies]
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_yaml = "=0.9.34"
+serde_json = "=1.0.140"
+clap = { version = "=4.5.37", features = ["derive"] }
+anyhow = "=1.0.98"
+# tree-sitter scanner — versions pinned to match the root crate exactly.
+tree-sitter = "=0.22.6"
+tree-sitter-python = "=0.21.0"
+tree-sitter-java = "=0.21.0"
+tree-sitter-c-sharp = "=0.21.3"
+tree-sitter-javascript = "=0.21.4"
+tree-sitter-typescript = "=0.21.2"
+tree-sitter-go = "=0.21.2"
+# Dependency-graph assembly (phase 3B). 0.6.5 builds clean on Rust 1.86 (MSRV well below).
+petgraph = "=0.6.5"
+fdml-types = { path = "crates/fdml-types" }
+fdml-util = { path = "crates/fdml-util" }
+fdml-discovery = { path = "crates/fdml-discovery" }
+fdml-scan = { path = "crates/fdml-scan" }
+fdml-graph = { path = "crates/fdml-graph" }
+fdml-flows = { path = "crates/fdml-flows" }
+fdml-integrations = { path = "crates/fdml-integrations" }
+fdml-assemble = { path = "crates/fdml-assemble" }
+fdml-enrich = { path = "crates/fdml-enrich" }

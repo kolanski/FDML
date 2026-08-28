@@ -28,6 +28,8 @@ impl PythonScanner {
             language: Language::Python,
             elements,
             imports,
+            anchors: Vec::new(),
+            literals: Vec::new(),
         })
     }
 

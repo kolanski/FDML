@@ -42,7 +42,161 @@ impl CommandRunner {
             Commands::ScanPlatform { input, output, format, exclude, llm, skip_scenarios, fast, model, provider, ollama_url, num_ctx, chunk_strategy } => {
                 self.run_scan_platform(input, output, format, exclude, llm, skip_scenarios, fast, model, provider, ollama_url, num_ctx, chunk_strategy)
             },
+            Commands::Index { path } => self.run_index(path),
+            Commands::Search { query, path, flow, llm, model, ollama_url, json } => self.run_index_search(query, path, flow, llm, model, ollama_url, json),
+            Commands::Get { symbol, path, json } => self.run_index_get(symbol, path, json),
+            Commands::Log { path, limit, json } => self.run_index_log(path, limit, json),
+            Commands::Facts { symbol, import, provider, path, json } => self.run_index_facts(symbol, import, provider, path, json),
+            Commands::Outline { symbol, path, json } => self.run_index_outline(symbol, path, json),
+            Commands::Impact { symbol, path, json } => self.run_index_impact(symbol, path, json),
+            Commands::Status { path, json } => self.run_index_status(path, json),
+            Commands::Mark { query, symbol, path, model, ollama_url, limit, force } => self.run_index_mark(query, symbol, path, model, ollama_url, limit, force),
         }
+    }
+
+    fn index_root(path: Option<String>) -> Result<PathBuf> {
+        let path = path.unwrap_or_else(|| ".".to_string());
+        std::fs::canonicalize(&path).map_err(|e| crate::error::FdmlError::project_error(format!("Cannot access repository '{}': {e}", path)))
+    }
+
+    fn run_index(&self, path: String) -> Result<()> {
+        let root = Self::index_root(Some(path))?;
+        let report = crate::index::Indexer::index(&root).map_err(crate::error::FdmlError::project_error)?;
+        println!("Indexed {}: {} parsed, {} unchanged, {} removed, {} symbols", root.display(), report.parsed_files, report.unchanged_files, report.removed_files, report.symbols);
+        Ok(())
+    }
+
+    fn run_index_search(&self, query: String, path: Option<String>, flow: bool, llm: bool, model: String, ollama_url: String, json: bool) -> Result<()> {
+        let root = Self::index_root(path)?;
+        let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        let mut results = index.search(&query).map_err(crate::error::FdmlError::project_error)?;
+        // M2: the honest signal. Below the threshold the deterministic layer says so —
+        // and only then may the experimental LLM fallback spend its seconds.
+        let useful = results.first().is_some_and(|r| r.score >= crate::index::USEFUL_SCORE);
+        let mut rescued = false;
+        if !useful && llm {
+            let picks = index.llm_fallback(&query, &ollama_url, &model).map_err(crate::error::FdmlError::project_error)?;
+            rescued = !picks.is_empty();
+            results.splice(0..0, picks);
+        }
+        // every call feeds the tooling-improvement loop; a failure here is a case, not noise
+        let _ = index.log_query(&query, results.first().map(|r| r.score), results.len(), useful || rescued, llm, rescued);
+        // `--flow` answers the follow-up question the results raise: how is the best match reached?
+        let flows = match (flow, results.first()) {
+            (true, Some(top)) => index.flows(&top.qualified_name).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        if json {
+            let payload = if flow { serde_json::json!({ "results": results, "flows": flows }) } else { serde_json::to_value(&results).unwrap() };
+            println!("{}", serde_json::to_string_pretty(&payload).unwrap());
+        } else {
+            if !useful && !results.iter().any(|r| r.kind == "llm-fallback") {
+                println!("⚠ no useful result{} — fall back to grep{}\n", results.first().map(|r| format!(" (top score {:.2})", r.score)).unwrap_or_default(), if llm { "" } else { ", or retry with --llm" });
+            }
+            for r in &results {
+                // the location to read comes first: that is what the caller does next
+                println!("{}:{}  read {}-{}{}", r.file, r.start_line, r.window[0], r.window[1], if r.marked { "  [marked]" } else { "" });
+                println!("{}  {}  score: {:.2}", r.qualified_name, r.kind, r.score);
+                if r.oversized { println!("⚠ god function: {} lines — retrieve by line anchor (`fdml mark \"<query>\" {}:<line>`), not as one symbol", r.body_lines, r.file); }
+                println!();
+            }
+            for f in &flows { println!("FLOW (entry {}, depth {})\n  {}{}\n", f.entry, f.depth, f.chain.join(" -> "), if f.next.is_empty() { String::new() } else { format!(" -> [{}]", f.next.join(", ")) }); }
+        }
+        Ok(())
+    }
+
+    fn run_index_get(&self, symbol: String, path: Option<String>, json: bool) -> Result<()> {
+        let root = Self::index_root(path)?;
+        let source = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?.get(&symbol).map_err(crate::error::FdmlError::project_error)?;
+        if json { println!("{}", serde_json::to_string_pretty(&source).unwrap()); }
+        else { println!("{}\n{}:{}-{}\n{}\n{}", source.qualified_name, source.file, source.start_line, source.end_line, source.signature.as_deref().unwrap_or(""), source.source); }
+        Ok(())
+    }
+
+    fn run_index_log(&self, path: Option<String>, limit: usize, json: bool) -> Result<()> {
+        let root = Self::index_root(path)?;
+        let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        let (total, failed, llm_used, llm_rescued, fails, episodes) = index.query_report(limit).map_err(crate::error::FdmlError::project_error)?;
+        if json {
+            println!("{}", serde_json::json!({"queries": total, "failed": failed, "llm_used": llm_used, "llm_rescued": llm_rescued,
+                "cases": fails.iter().map(|(q,n,at)| serde_json::json!({"query": q, "times": n, "last": at})).collect::<Vec<_>>(),
+                "retry_episodes": episodes}));
+        } else {
+            let rate = if total > 0 { 100 - 100 * failed / total } else { 0 };
+            println!("queries: {total}   useful: {rate}%   failed: {failed}   llm fallback: {llm_used} fired / {llm_rescued} rescued\n");
+            if fails.is_empty() { println!("no failed queries accumulated — nothing to improve yet"); }
+            else { println!("CASES (failed queries — what this project needs the tool to learn):"); for (q, n, at) in &fails { println!("  x{n:<3} {q}   (last: {at})"); } }
+            if !episodes.is_empty() {
+                println!("\nRETRY EPISODES (the agent rephrasing in frustration — strongest passive signal):");
+                for chain in &episodes { println!("  {}", chain.join("  ->  ")); }
+            }
+        }
+        Ok(())
+    }
+
+    fn run_index_facts(&self, symbol: Option<String>, import: Option<String>, provider: String, path: Option<String>, json: bool) -> Result<()> {
+        let root = Self::index_root(path)?;
+        let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        if let Some(file) = import {
+            let text = std::fs::read_to_string(&file).map_err(|e| crate::error::FdmlError::project_error(format!("Cannot read '{file}': {e}")))?;
+            let doc: serde_json::Value = serde_json::from_str(&text).map_err(|e| crate::error::FdmlError::project_error(format!("'{file}' is not valid JSON: {e}")))?;
+            let (kept, skipped) = index.import_facts(&doc, &provider).map_err(crate::error::FdmlError::project_error)?;
+            println!("Imported {kept} facts from {file}{}", if skipped > 0 { format!(" ({skipped} entries had no identifiable target)") } else { String::new() });
+            return Ok(());
+        }
+        let symbol = symbol.ok_or_else(|| crate::error::FdmlError::project_error("give a symbol to read, or --import a facts file"))?;
+        let facts = index.facts_for(&symbol).map_err(crate::error::FdmlError::project_error)?;
+        if json { println!("{}", serde_json::to_string_pretty(&facts).unwrap()); }
+        else if facts.is_empty() { println!("No facts recorded for {symbol}"); }
+        else { for f in &facts { println!("{} · {} · {}\n  {}\n", f.fact_kind, f.provider, f.confidence, f.payload); } }
+        Ok(())
+    }
+
+    fn run_index_outline(&self, symbol: String, path: Option<String>, json: bool) -> Result<()> {
+        let root = Self::index_root(path)?;
+        let outline = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?.outline(&symbol).map_err(crate::error::FdmlError::project_error)?;
+        if json { println!("{}", serde_json::to_string_pretty(&outline).unwrap()); }
+        else {
+            println!("{}\n{}:{}-{}  {} lines, {} internal call sites, {} phases\n", outline.symbol, outline.file, outline.start_line, outline.end_line, outline.body_lines, outline.call_sites, outline.phases.len());
+            for p in &outline.phases {
+                println!("{}-{}  {}", p.line, p.end_line, p.label.as_deref().unwrap_or("—"));
+                println!("    {}", p.calls.join(", "));
+            }
+        }
+        Ok(())
+    }
+
+    fn run_index_impact(&self, symbol: String, path: Option<String>, json: bool) -> Result<()> {
+        let root = Self::index_root(path)?;
+        let impact = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?.impact(&symbol).map_err(crate::error::FdmlError::project_error)?;
+        if json { println!("{}", serde_json::to_string_pretty(&impact).unwrap()); }
+        else { println!("{}\n\nCALLERS\n{}\n\nCALLEES / DEPENDS ON\n{}\n\nIMPORTS\n{}\n\nIMPLEMENTATIONS\n{}\n\nTESTS\n{}", impact.symbol, impact.callers.join("\n"), impact.callees.join("\n"), impact.imports.join("\n"), impact.implementations.join("\n"), impact.tests.join("\n")); }
+        Ok(())
+    }
+
+    fn run_index_status(&self, path: Option<String>, json: bool) -> Result<()> {
+        let root = Self::index_root(path)?;
+        let status = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?.status().map_err(crate::error::FdmlError::project_error)?;
+        if json { println!("{}", serde_json::to_string_pretty(&status).unwrap()); }
+        else { println!("Repository: {}\nFiles: {}\nSymbols: {}\nReferences: {}\nMarks: {}\nLast indexed: {}\nIndex size: {} bytes", status.root_path, status.files, status.symbols, status.references, status.marks, status.last_indexed.unwrap_or_else(|| "never".into()), status.index_size); }
+        Ok(())
+    }
+
+    fn run_index_mark(&self, query: Option<String>, symbol: Option<String>, path: Option<String>, model: String, ollama_url: String, limit: usize, force: bool) -> Result<()> {
+        let root = Self::index_root(path)?;
+        let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        match (query, symbol) {
+            (Some(query), Some(symbol)) => {
+                let target = index.mark_association(&query, &symbol).map_err(crate::error::FdmlError::project_error)?;
+                println!("Marked \"{query}\" -> {target}");
+            }
+            (Some(_), None) => return Err(crate::error::FdmlError::project_error("`fdml mark <query> <symbol>` needs both arguments; use `fdml mark` alone for local-LLM descriptions")),
+            _ => {
+                let marked = index.mark(&model, &ollama_url, limit, force).map_err(crate::error::FdmlError::project_error)?;
+                println!("Marked {marked} symbols with {model}");
+            }
+        }
+        Ok(())
     }
     
     fn run_init(&self, name: String, force: bool) -> Result<()> {
