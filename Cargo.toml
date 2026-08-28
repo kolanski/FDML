@@ -1,6 +1,6 @@
 [package]
 name = "fdml"
-version = "0.3.11"
+version = "0.4.0"
 edition = "2021"
 description = "FDML (Feature-Driven Modeling Language) CLI tools"
 authors = ["FDML Contributors"]
