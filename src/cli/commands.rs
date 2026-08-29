@@ -47,6 +47,7 @@ impl CommandRunner {
             Commands::Get { symbol, path, json } => self.run_index_get(symbol, path, json),
             Commands::Note { phrase, body, kind, target, aliases, list, delete, path, json } => self.run_note(phrase, body, kind, target, aliases, list, delete, path, json),
             Commands::Dossier { commit, path, json } => self.run_dossier(commit, path, json),
+            Commands::Candidates { min, limit, path, json } => self.run_candidates(min, limit, path, json),
             Commands::Heal { apply, limit, min_fails, model, ollama_url, path, json } => self.run_heal(apply, limit, min_fails, model, ollama_url, path, json),
             Commands::Skill { install, global, path } => self.run_skill(install, global, path),
             Commands::Log { path, limit, json } => self.run_index_log(path, limit, json),
@@ -197,14 +198,42 @@ impl CommandRunner {
             .unwrap_or_default()
     }
 
+    fn run_candidates(&self, min: usize, limit: usize, path: Option<String>, json: bool) -> Result<()> {
+        let root = Self::index_root(path)?;
+        let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        let found = index.tool_candidates(min, limit).map_err(crate::error::FdmlError::project_error)?;
+        let _ = index.log_command("candidates", "", None, found.len(), !found.is_empty(), false, false);
+        if json { println!("{}", serde_json::to_string_pretty(&found).unwrap()); return Ok(()); }
+        if found.is_empty() { println!("nothing repeated {min}+ times in this repo's transcripts — no tool is missing yet"); return Ok(()); }
+        println!("Shell work done by hand repeatedly — each one is a tool that should exist:\n");
+        for c in &found {
+            println!("x{:<4} {}", c.times, c.shape);
+            println!("      e.g. {}", c.example.lines().next().unwrap_or("").chars().take(100).collect::<String>());
+            if !c.last_seen.is_empty() { println!("      last {}", c.last_seen.replace('T', " ")); }
+            println!();
+        }
+        Ok(())
+    }
+
     fn run_dossier(&self, commit: Option<String>, path: Option<String>, json: bool) -> Result<()> {
         let root = Self::index_root(path)?;
         let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        let explicit = commit.is_some();
         let commit = commit.unwrap_or_else(|| {
             std::process::Command::new("git").args(["-C", &root.display().to_string(), "rev-parse", "--short", "HEAD"]).output().ok()
                 .filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
         });
-        let d = index.dossier(&commit).map_err(crate::error::FdmlError::project_error)?;
+        let mut d = index.dossier(&commit).map_err(crate::error::FdmlError::project_error)?;
+        // "Where were we" must survive the next commit: an empty card at HEAD means
+        // the work was recorded earlier, so fall back to the last commit that has one.
+        let mut fell_back = false;
+        if !explicit && d.is_empty() {
+            let prev = index.list_notes(None, 1).ok().and_then(|n| n.into_iter().next()).and_then(|n| n.commit_sha);
+            if let Some(prev) = prev.filter(|p| !p.is_empty() && *p != commit) {
+                d = index.dossier(&prev).map_err(crate::error::FdmlError::project_error)?;
+                fell_back = true;
+            }
+        }
         let _ = index.log_command("dossier", &commit, None, d.anchors.len(), d.missing.is_empty(), false, false);
         if json { println!("{}", serde_json::to_string_pretty(&d).unwrap()); return Ok(()); }
         let block = |label: &str, notes: &[crate::index::Note]| {
@@ -215,14 +244,15 @@ impl CommandRunner {
                 }
             }
         };
-        println!("DOSSIER  {}
-", d.commit);
+        println!("DOSSIER  {}{}
+", d.commit, if fell_back { format!("  (nothing recorded at {commit} — showing the last card)") } else { String::new() });
         for (i, a) in d.anchors.iter().enumerate() { println!("{:<9}{a}", if i == 0 { "ANCHOR" } else { "" }); }
         if !d.flow.is_empty() { println!("{:<9}{}", "FLOW", d.flow.join(" → ")); }
         block("STATE", &d.state);
         block("NOTE", &d.numbers);
         block("REJECTED", &d.rejected);
         block("VERIFY", &d.verify);
+        block("PLAYBOOK", &d.playbook);
         block("PENDING", &d.pending);
         block("LINKS", &d.links);
         for (i, s) in d.symptoms.iter().enumerate() { println!("{:<9}«{s}»", if i == 0 { "SYMPTOMS" } else { "" }); }
@@ -269,6 +299,18 @@ MISSING — the card has holes, which is worth knowing:");
             std::fs::write(target, &skill).map_err(|e| crate::error::FdmlError::project_error(format!("cannot write {}: {e}", target.display())))?;
             println!("Installed fdml-nav skill -> {}", target.display());
             println!("New Claude Code sessions in {} will search the index before grepping.", if global { "any repository" } else { "this repository" });
+            // A skill is loaded when its description matches; CLAUDE.md is loaded
+            // always. Repos that mention the tool there actually use it — the ones
+            // relying on the skill alone see it ignored.
+            let claude_md = project_root.join("CLAUDE.md");
+            let mentioned = std::fs::read_to_string(&claude_md).map(|t| t.contains("fdml")).unwrap_or(false);
+            if !global && !mentioned {
+                println!("\nCLAUDE.md does not mention the index. A skill only loads when its\ndescription matches; CLAUDE.md is always in context. Consider adding:\n");
+                println!("    ## Navigate with the index, not with grep");
+                println!("    `fdml search \"<query>\" --limit 3` before grepping; `fdml outline <symbol>`");
+                println!("    for huge functions; `fdml note \"<symptom>\"` for why it broke last time;");
+                println!("    `fdml dossier` to pick up where the last session stopped.");
+            }
             return Ok(());
         }
         let mark = |p: &std::path::Path| if p.exists() { "✓ active " } else { "✗ missing" };
