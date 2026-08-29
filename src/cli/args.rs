@@ -314,6 +314,71 @@ pub enum Commands {
         json: bool,
     },
 
+    /// Record or read knowledge with no address in the code: repro recipes,
+    /// postmortems, invariants, rejected hypotheses, methods
+    Note {
+        /// Words you would actually search by — the symptom, not the terminology
+        phrase: Option<String>,
+        /// The note itself; keep it to 3-5 lines. Omit to search instead of write
+        body: Option<String>,
+        /// repro | postmortem | invariant | rejected | method
+        #[arg(long, default_value = "note")]
+        kind: String,
+        /// Anchor to a symbol or file:line so it surfaces with that hit
+        #[arg(long = "at")]
+        target: Option<String>,
+        /// Extra phrasings, repeatable — the lexical key needs the words people use
+        #[arg(long = "alias")]
+        aliases: Vec<String>,
+        /// List recent notes (optionally of one kind)
+        #[arg(long)]
+        list: bool,
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Turn accumulated failed queries into marks via the local-LLM evidence picker
+    Heal {
+        /// Write the proposed marks (default: dry-run, print only)
+        #[arg(long)]
+        apply: bool,
+        /// Failed queries to attempt
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        /// Only heal queries that failed at least this many times (1 = every failure)
+        #[arg(long, default_value_t = 2)]
+        min_fails: usize,
+        /// Ollama model
+        #[arg(long, default_value = "hf.co/unsloth/gemma-4-E4B-it-qat-GGUF:UD-Q4_K_XL")]
+        model: String,
+        /// Ollama base URL
+        #[arg(long, default_value = "http://localhost:11434")]
+        ollama_url: String,
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Check whether the fdml-nav agent skill is active here, or install it
+    Skill {
+        /// Install the skill instead of just checking
+        #[arg(long)]
+        install: bool,
+        /// Target the user-global ~/.claude instead of this project
+        #[arg(long)]
+        global: bool,
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+    },
+
     /// Show search telemetry: hit-rate and accumulated failed queries (tooling-improvement cases)
     Log {
         /// Repository root; defaults to the current directory
@@ -384,6 +449,10 @@ pub enum Commands {
         query: Option<String>,
         /// Symbol, file, or file:line the query should resolve to
         symbol: Option<String>,
+        /// Extra phrasings for the same place; repeatable. Mark keys are lexical, so
+        /// the wording that actually failed matters more than the "correct" term.
+        #[arg(long = "alias")]
+        aliases: Vec<String>,
         /// Repository root; defaults to the current directory
         #[arg(long)]
         path: Option<String>,

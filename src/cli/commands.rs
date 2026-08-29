@@ -45,12 +45,15 @@ impl CommandRunner {
             Commands::Index { path } => self.run_index(path),
             Commands::Search { query, path, flow, llm, model, ollama_url, json } => self.run_index_search(query, path, flow, llm, model, ollama_url, json),
             Commands::Get { symbol, path, json } => self.run_index_get(symbol, path, json),
+            Commands::Note { phrase, body, kind, target, aliases, list, path, json } => self.run_note(phrase, body, kind, target, aliases, list, path, json),
+            Commands::Heal { apply, limit, min_fails, model, ollama_url, path, json } => self.run_heal(apply, limit, min_fails, model, ollama_url, path, json),
+            Commands::Skill { install, global, path } => self.run_skill(install, global, path),
             Commands::Log { path, limit, json } => self.run_index_log(path, limit, json),
             Commands::Facts { symbol, import, provider, path, json } => self.run_index_facts(symbol, import, provider, path, json),
             Commands::Outline { symbol, path, json } => self.run_index_outline(symbol, path, json),
             Commands::Impact { symbol, path, json } => self.run_index_impact(symbol, path, json),
             Commands::Status { path, json } => self.run_index_status(path, json),
-            Commands::Mark { query, symbol, path, model, ollama_url, limit, force } => self.run_index_mark(query, symbol, path, model, ollama_url, limit, force),
+            Commands::Mark { query, symbol, aliases, path, model, ollama_url, limit, force } => self.run_index_mark(query, symbol, aliases, path, model, ollama_url, limit, force),
         }
     }
 
@@ -97,6 +100,7 @@ impl CommandRunner {
                 // the location to read comes first: that is what the caller does next
                 println!("{}:{}  read {}-{}{}", r.file, r.start_line, r.window[0], r.window[1], if r.marked { "  [marked]" } else { "" });
                 println!("{}  {}  score: {:.2}", r.qualified_name, r.kind, r.score);
+                for n in &r.notes { println!("  ↳ [{}] {}{}", n.kind, n.body.lines().next().unwrap_or(""), if n.stale { "  ⚠ stale" } else { "" }); }
                 if r.oversized { println!("⚠ god function: {} lines — retrieve by line anchor (`fdml mark \"<query>\" {}:<line>`), not as one symbol", r.body_lines, r.file); }
                 println!();
             }
@@ -110,6 +114,82 @@ impl CommandRunner {
         let source = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?.get(&symbol).map_err(crate::error::FdmlError::project_error)?;
         if json { println!("{}", serde_json::to_string_pretty(&source).unwrap()); }
         else { println!("{}\n{}:{}-{}\n{}\n{}", source.qualified_name, source.file, source.start_line, source.end_line, source.signature.as_deref().unwrap_or(""), source.source); }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_note(&self, phrase: Option<String>, body: Option<String>, kind: String, target: Option<String>, aliases: Vec<String>, list: bool, path: Option<String>, json: bool) -> Result<()> {
+        let root = Self::index_root(path)?;
+        let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        let show = |notes: &[crate::index::Note]| {
+            for n in notes {
+                println!("[{}] {}{}", n.kind, n.phrase, if n.stale { "  ⚠ stale: file changed since this was recorded" } else { "" });
+                for line in n.body.lines() { println!("    {line}"); }
+                println!("    · {}  · {}{}\n", n.target.clone().unwrap_or_else(|| "—".into()), n.created_at,
+                    n.commit_sha.as_ref().map(|c| format!("  · commit {c}")).unwrap_or_default());
+            }
+        };
+        match (phrase, body) {
+            (Some(phrase), Some(body)) => {
+                let n = index.add_note(&phrase, &body, &kind, target.as_deref(), &aliases).map_err(crate::error::FdmlError::project_error)?;
+                println!("Recorded {kind} \"{phrase}\"{} ({n} phrasing{})", target.map(|t| format!(" @ {t}")).unwrap_or_default(), if n == 1 { "" } else { "s" });
+            }
+            (Some(query), None) if !list => {
+                let tokens: Vec<String> = query.to_lowercase().split(|c: char| !c.is_alphanumeric() && c != '_').filter(|t| !t.is_empty()).map(str::to_string).collect();
+                let notes = index.notes_for_query(&tokens).map_err(crate::error::FdmlError::project_error)?;
+                if json { println!("{}", serde_json::to_string_pretty(&notes).unwrap()); }
+                else if notes.is_empty() { println!("no note matches \"{query}\" — record one with `fdml note \"<symptom>\" \"<what you learned>\"`"); }
+                else { show(&notes); }
+            }
+            _ => {
+                let filter = if kind == "note" { None } else { Some(kind.as_str()) };
+                let notes = index.list_notes(filter, 20).map_err(crate::error::FdmlError::project_error)?;
+                if json { println!("{}", serde_json::to_string_pretty(&notes).unwrap()); }
+                else if notes.is_empty() { println!("no notes recorded yet"); }
+                else { show(&notes); }
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_heal(&self, apply: bool, limit: usize, min_fails: usize, model: String, ollama_url: String, path: Option<String>, json: bool) -> Result<()> {
+        let root = Self::index_root(path)?;
+        let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        let proposals = index.heal(&ollama_url, &model, apply, limit, min_fails).map_err(crate::error::FdmlError::project_error)?;
+        if json { println!("{}", serde_json::to_string_pretty(&proposals).unwrap()); return Ok(()); }
+        if proposals.is_empty() { println!("nothing to heal — no repeated unresolved failures, or no evidence found"); return Ok(()); }
+        for p in &proposals {
+            println!("{} \"{}\" -> {}", if p.applied { "✓ marked " } else { "proposed" }, p.query, p.target);
+            if !p.reason.is_empty() { println!("           {}", p.reason); }
+        }
+        if !apply { println!("\ndry-run: re-run with --apply to write these marks"); }
+        Ok(())
+    }
+
+    fn run_skill(&self, install: bool, global: bool, path: Option<String>) -> Result<()> {
+        // The canonical skill ships inside the binary, so any repo can activate the
+        // index-first navigation loop without hunting for files.
+        const SKILL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/.claude/skills/fdml-nav/SKILL.md"));
+        let home = std::env::var("HOME").unwrap_or_default();
+        let user_path = std::path::Path::new(&home).join(".claude/skills/fdml-nav/SKILL.md");
+        let project_root = Self::index_root(path)?;
+        let project_path = project_root.join(".claude/skills/fdml-nav/SKILL.md");
+        if install {
+            let target = if global { &user_path } else { &project_path };
+            if let Some(dir) = target.parent() { std::fs::create_dir_all(dir).map_err(|e| crate::error::FdmlError::project_error(format!("cannot create {}: {e}", dir.display())))?; }
+            std::fs::write(target, SKILL).map_err(|e| crate::error::FdmlError::project_error(format!("cannot write {}: {e}", target.display())))?;
+            println!("Installed fdml-nav skill -> {}", target.display());
+            println!("New Claude Code sessions in {} will search the index before grepping.", if global { "any repository" } else { "this repository" });
+            return Ok(());
+        }
+        let mark = |p: &std::path::Path| if p.exists() { "✓ active " } else { "✗ missing" };
+        println!("fdml-nav skill status for {}:", project_root.display());
+        println!("  {} project  {}", mark(&project_path), project_path.display());
+        println!("  {} global   {}", mark(&user_path), user_path.display());
+        if !project_path.exists() && !user_path.exists() {
+            println!("\nnot active anywhere — run `fdml skill --install` (this repo) or `fdml skill --install --global` (all repos)");
+        }
         Ok(())
     }
 
@@ -182,13 +262,18 @@ impl CommandRunner {
         Ok(())
     }
 
-    fn run_index_mark(&self, query: Option<String>, symbol: Option<String>, path: Option<String>, model: String, ollama_url: String, limit: usize, force: bool) -> Result<()> {
+    fn run_index_mark(&self, query: Option<String>, symbol: Option<String>, aliases: Vec<String>, path: Option<String>, model: String, ollama_url: String, limit: usize, force: bool) -> Result<()> {
         let root = Self::index_root(path)?;
         let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
         match (query, symbol) {
             (Some(query), Some(symbol)) => {
                 let target = index.mark_association(&query, &symbol).map_err(crate::error::FdmlError::project_error)?;
                 println!("Marked \"{query}\" -> {target}");
+                // one place, several ways to ask for it — the lexical key needs each
+                for alias in &aliases {
+                    index.mark_association(alias, &target).map_err(crate::error::FdmlError::project_error)?;
+                    println!("     +  \"{alias}\"");
+                }
             }
             (Some(_), None) => return Err(crate::error::FdmlError::project_error("`fdml mark <query> <symbol>` needs both arguments; use `fdml mark` alone for local-LLM descriptions")),
             _ => {
