@@ -62,7 +62,7 @@ const PARTIAL_LITERAL: f64 = 0.4;
 /// Everything recorded against one commit, gathered into one card: the change's
 /// dossier. Not a new store — a view over notes, marks and the call graph, keyed
 /// by the commit they were written on.
-#[derive(Debug, Serialize)] pub struct Dossier { pub commit: String, pub anchors: Vec<String>, pub flow: Vec<String>, pub state: Vec<Note>, pub numbers: Vec<Note>, pub rejected: Vec<Note>, pub verify: Vec<Note>, pub symptoms: Vec<String>, pub missing: Vec<String> }
+#[derive(Debug, Serialize)] pub struct Dossier { pub commit: String, pub anchors: Vec<String>, pub flow: Vec<String>, pub state: Vec<Note>, pub numbers: Vec<Note>, pub rejected: Vec<Note>, pub verify: Vec<Note>, pub pending: Vec<Note>, pub links: Vec<Note>, pub symptoms: Vec<String>, pub missing: Vec<String> }
 #[derive(Debug, Serialize)] pub struct HealProposal { pub query: String, pub target: String, pub reason: String, pub applied: bool }
 #[derive(Debug, Serialize)] pub struct SymbolFact { pub provider: String, pub target: String, pub fact_kind: String, pub payload: serde_json::Value, pub confidence: String }
 #[derive(Debug, Serialize)] pub struct ImpactGraph { pub symbol: String, pub callers: Vec<String>, pub callees: Vec<String>, pub imports: Vec<String>, pub implementations: Vec<String>, pub tests: Vec<String> }
@@ -425,10 +425,10 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
         let mut missing=Vec::new();
         if anchors.is_empty() { missing.push("ANCHOR — no note is attached to a symbol (`--at`)".into()) }
         if of("invariant").is_empty() { missing.push("STATE/NUMBERS — no invariant recorded (`--kind invariant`)".into()) }
-        if of("rejected").is_empty() { missing.push("REJECTED — nothing recorded as tried-and-wrong (`--kind rejected`)".into()) }
+        if of("pending").is_empty()&&of("rejected").is_empty() { missing.push("REJECTED — nothing recorded as tried-and-wrong (`--kind rejected`)".into()) }
         if of("method").is_empty() { missing.push("VERIFY — no check recorded (`--kind method`)".into()) }
         if symptoms.is_empty() { missing.push("SYMPTOMS — no postmortem or repro (`--kind postmortem`)".into()) }
-        Ok(Dossier{commit:commit.to_string(),anchors,flow,state:of("invariant"),numbers:of("note"),rejected:of("rejected"),verify:of("method"),symptoms,missing})
+        Ok(Dossier{commit:commit.to_string(),anchors,flow,state:of("invariant"),numbers:of("note"),rejected:of("rejected"),verify:of("method"),pending:of("pending"),links:of("link"),symptoms,missing})
     }
 
     /// Turn accumulated search failures into permanent marks: for each unresolved
@@ -751,6 +751,22 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
     }
 
     /// Which commands actually get used — the adoption half of the picture.
+    /// Files whose mtime/size no longer match the index. Cheap (a stat per file) and
+    /// worth doing on every search: an index that silently predates the code turns a
+    /// correct "no useful result" into a lie.
+    pub fn stale_files(&self)->usize{
+        let mut st=match self.db.prepare("SELECT path,mtime,size FROM files") { Ok(s)=>s, Err(_)=>return 0 };
+        let rows=match st.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?))) { Ok(r)=>r, Err(_)=>return 0 };
+        rows.filter_map(|r|r.ok()).filter(|(path,mtime,size)|{
+            match fs::metadata(self.root.join(path)) {
+                Ok(m)=>{
+                    let now=m.modified().ok().and_then(|t|t.duration_since(UNIX_EPOCH).ok()).map(|d|d.as_nanos() as i64).unwrap_or(0);
+                    now!=*mtime||m.len() as i64!=*size
+                }
+                Err(_)=>true,
+            }
+        }).count()
+    }
     pub fn command_usage(&self)->std::result::Result<Vec<(String,i64)>,String>{
         let mut st=self.db.prepare("SELECT command,count(*) FROM query_log GROUP BY command ORDER BY 2 DESC").map_err(|e|e.to_string())?;
         let rows:rusqlite::Result<Vec<(String,i64)>>=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?.collect();
