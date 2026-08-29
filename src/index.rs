@@ -9,7 +9,7 @@ use std::{collections::HashSet, fs, hash::{Hash, Hasher}, path::{Path, PathBuf},
 const SKIP_DIRS: &[&str] = &[".git", ".fdml", "node_modules", "target", "build", "dist", "vendor", "third_party", "third-party", "external", "deps", ".venv", "venv", "__pycache__", "coverage"];
 // 4: C parsed with tree-sitter — macros, typedefs, structs, globals, prototypes,
 // and declarations inside include guards.
-const INDEX_FORMAT_VERSION: &str = "9";
+const INDEX_FORMAT_VERSION: &str = "10";
 /// Bounds for `flows`, mirroring the deterministic `fdml-flows` pass: a visited set
 /// plus a hard depth cap, so cyclic call graphs still terminate.
 const FLOW_MAX_DEPTH: usize = 6;
@@ -40,6 +40,9 @@ const PARTIAL_LITERAL: f64 = 0.4;
 #[derive(Debug, Serialize)] pub struct SearchResult { pub symbol: String, pub qualified_name: String, pub kind: String, pub file: String, pub start_line: usize, pub end_line: usize, pub score: f64, #[serde(default)] pub marked: bool, pub body_lines: usize, pub oversized: bool,
     /// `main -> bcensus` when the hit is inside a body, so the caller knows where it landed
     #[serde(skip_serializing_if = "Option::is_none")] pub anchor: Option<String>,
+    /// Notes anchored to this symbol — surfaced inline, because a note nobody
+    /// sees is a note nobody wrote
+    #[serde(skip_serializing_if = "Vec::is_empty", default)] pub notes: Vec<Note>,
     /// The lines to actually read: agents read ~40 around a hit, never a whole function
     pub window: [usize; 2] }
 #[derive(Debug, Serialize)] pub struct SymbolSource { pub symbol: String, pub qualified_name: String, pub file: String, pub start_line: usize, pub end_line: usize, pub signature: Option<String>, pub description: Option<String>, pub input_summary: Option<String>, pub process_summary: Option<String>, pub output_summary: Option<String>, pub source: String, pub source_file_tokens_approx: usize, pub retrieved_tokens_approx: usize, pub tokens_saved_approx: usize, pub reduction_ratio: f64 }
@@ -47,6 +50,12 @@ const PARTIAL_LITERAL: f64 = 0.4;
 #[derive(Debug, Serialize)] pub struct Phase { pub line: usize, pub end_line: usize, pub label: Option<String>, pub calls: Vec<String> }
 #[derive(Debug, Serialize)] pub struct Outline { pub symbol: String, pub file: String, pub start_line: usize, pub end_line: usize, pub body_lines: usize, pub call_sites: usize, pub phases: Vec<Phase> }
 #[derive(Debug, Serialize)] pub struct Evidence { pub file: String, pub line: usize, pub text: String, pub symbol: Option<String> }
+/// Knowledge with no address in the code: a repro recipe, a postmortem, an
+/// invariant, a rejected hypothesis, a method. Words -> text, where `marks` are
+/// words -> place. Optionally anchored to a symbol so it surfaces alongside it.
+#[derive(Debug, Serialize, Clone)] pub struct Note { pub kind: String, pub phrase: String, pub body: String, pub target: Option<String>, pub commit_sha: Option<String>, pub created_at: String, pub stale: bool }
+/// One failed query turned into a proposed mark.
+#[derive(Debug, Serialize)] pub struct HealProposal { pub query: String, pub target: String, pub reason: String, pub applied: bool }
 #[derive(Debug, Serialize)] pub struct SymbolFact { pub provider: String, pub target: String, pub fact_kind: String, pub payload: serde_json::Value, pub confidence: String }
 #[derive(Debug, Serialize)] pub struct ImpactGraph { pub symbol: String, pub callers: Vec<String>, pub callees: Vec<String>, pub imports: Vec<String>, pub implementations: Vec<String>, pub tests: Vec<String> }
 #[derive(Debug, Serialize)] pub struct IndexStatus { pub root_path: String, pub files: usize, pub symbols: usize, pub references: usize, pub marks: usize, pub last_indexed: Option<String>, pub index_size: u64 }
@@ -92,7 +101,7 @@ impl RepositoryIndex {
         db.execute_batch("PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS files(id INTEGER PRIMARY KEY,path TEXT UNIQUE NOT NULL,language TEXT NOT NULL,content_hash TEXT NOT NULL,mtime INTEGER NOT NULL,size INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS symbols(id INTEGER PRIMARY KEY,file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,name TEXT NOT NULL,qualified_name TEXT NOT NULL,kind TEXT NOT NULL,parent_symbol_id INTEGER,start_line INTEGER NOT NULL,start_column INTEGER NOT NULL,end_line INTEGER NOT NULL,end_column INTEGER NOT NULL,signature TEXT,description TEXT,input_summary TEXT,process_summary TEXT,output_summary TEXT,description_model TEXT,description_version TEXT,description_hash TEXT,tags TEXT,name_tokens TEXT,UNIQUE(file_id,qualified_name,start_line));
+CREATE TABLE IF NOT EXISTS symbols(id INTEGER PRIMARY KEY,file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,name TEXT NOT NULL,qualified_name TEXT NOT NULL,kind TEXT NOT NULL,parent_symbol_id INTEGER,start_line INTEGER NOT NULL,start_column INTEGER NOT NULL,end_line INTEGER NOT NULL,end_column INTEGER NOT NULL,signature TEXT,description TEXT,input_summary TEXT,process_summary TEXT,output_summary TEXT,description_model TEXT,description_version TEXT,description_hash TEXT,tags TEXT,name_tokens TEXT,doc TEXT,UNIQUE(file_id,qualified_name,start_line));
 CREATE TABLE IF NOT EXISTS relation_edges(id INTEGER PRIMARY KEY,file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,source_qn TEXT NOT NULL,target_name TEXT NOT NULL,kind TEXT NOT NULL,line INTEGER NOT NULL,inferred INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS references_idx(id INTEGER PRIMARY KEY,source_symbol_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE,target_symbol_id INTEGER REFERENCES symbols(id) ON DELETE SET NULL,file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,line INTEGER NOT NULL,kind TEXT NOT NULL,inferred INTEGER NOT NULL DEFAULT 0);
 CREATE VIRTUAL TABLE IF NOT EXISTS symbol_search USING fts5(symbol_id UNINDEXED,name,qualified_name,signature,path);
@@ -103,9 +112,11 @@ CREATE TABLE IF NOT EXISTS anchors(id INTEGER PRIMARY KEY,file_id INTEGER NOT NU
 CREATE INDEX IF NOT EXISTS anchors_file ON anchors(file_id);
 CREATE TABLE IF NOT EXISTS literal_occurrences(id INTEGER PRIMARY KEY,file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,value TEXT NOT NULL,normalized TEXT NOT NULL,kind TEXT NOT NULL,usage_kind TEXT NOT NULL,line INTEGER NOT NULL,parent_symbol TEXT NOT NULL,anchor_id INTEGER);
 CREATE INDEX IF NOT EXISTS literals_value ON literal_occurrences(value);
+CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,query_key TEXT NOT NULL,phrase TEXT NOT NULL,body TEXT NOT NULL,target TEXT,target_hash TEXT,commit_sha TEXT,created_at TEXT NOT NULL DEFAULT (datetime('now')),UNIQUE(query_key,kind,body));
+CREATE INDEX IF NOT EXISTS notes_target ON notes(target);
 CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,top_score REAL,results INTEGER NOT NULL,useful INTEGER NOT NULL,llm_used INTEGER NOT NULL DEFAULT 0,llm_rescued INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT (datetime('now')));").map_err(|e|e.to_string())?;
         // Forward-compatible migration for indexes created before local marking.
-        for column in ["name_tokens TEXT", "input_summary TEXT", "process_summary TEXT", "output_summary TEXT", "description_model TEXT", "description_version TEXT", "description_hash TEXT", "tags TEXT"] { let _ = db.execute(&format!("ALTER TABLE symbols ADD COLUMN {column}"), []); }
+        for column in ["doc TEXT", "name_tokens TEXT", "input_summary TEXT", "process_summary TEXT", "output_summary TEXT", "description_model TEXT", "description_version TEXT", "description_hash TEXT", "tags TEXT"] { let _ = db.execute(&format!("ALTER TABLE symbols ADD COLUMN {column}"), []); }
         Ok(Self { root, db })
     }
 
@@ -122,6 +133,9 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
         for el in &analysis.elements { self.insert_element(file_id,el,&module_qn,None)?; self.insert_calls(file_id, el, &module_qn, text)?; }
         self.insert_navigation(file_id,&analysis)?;
         for imp in analysis.imports { self.db.execute("INSERT INTO relation_edges(file_id,source_qn,target_name,kind,line,inferred) VALUES(?1,?2,?3,'import',?4,0)",params![file_id,module_qn,imp.names.first().cloned().unwrap_or(imp.module),imp.line as i64]).map_err(|e|e.to_string())?; }
+        // The comment above a declaration is the author explaining the concept — the
+        // richest searchable text in the file, previously invisible to search.
+        self.attach_docs(file_id,text)?;
         Ok(())
     }
     /// Anchors and literals: searchable evidence about *where to read*, deliberately
@@ -154,6 +168,17 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
         for child in &el.children { self.insert_calls(file_id,child,&qn,text)?; }
         Ok(())
     }
+    fn attach_docs(&self,file_id:i64,text:&str)->std::result::Result<(),String>{
+        let lines:Vec<&str>=text.lines().collect();
+        let mut st=self.db.prepare("SELECT id,start_line FROM symbols WHERE file_id=?1 AND kind!='module'").map_err(|e|e.to_string())?;
+        let rows:Vec<(i64,i64)>=st.query_map(params![file_id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())?;
+        for (id,start) in rows {
+            if let Some(doc)=doc_above(&lines,start as usize) {
+                self.db.execute("UPDATE symbols SET doc=?1 WHERE id=?2",params![doc,id]).map_err(|e|e.to_string())?;
+            }
+        }
+        Ok(())
+    }
     fn insert_symbol(&self,file:i64,name:&str,qn:&str,kind:&str,parent:Option<i64>,sl:usize,sc:usize,el:usize,ec:usize,sig:Option<&str>)->std::result::Result<i64,String>{
         // Two declarations can legitimately land on one line (`typedef struct X {...} X;`).
         // A duplicate is not a reason to abort indexing a repository.
@@ -169,7 +194,7 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
     pub fn search(&self,q:&str)->std::result::Result<Vec<SearchResult>,String>{
         // same tokenizer as `mark_key`, so remembered wording and typed wording meet
         let term=q.to_lowercase(); let tokens:Vec<String>=term.split(|c:char|!c.is_alphanumeric()&&c!='_').filter(|t|!t.is_empty()).map(str::to_string).collect(); if tokens.is_empty(){return Ok(vec![])};
-        let fields="lower(s.name) LIKE '%'||?IDX||'%' OR lower(s.qualified_name) LIKE '%'||?IDX||'%' OR lower(f.path) LIKE '%'||?IDX||'%' OR lower(coalesce(s.signature,'')) LIKE '%'||?IDX||'%' OR lower(coalesce(s.description,'')) LIKE '%'||?IDX||'%' OR lower(coalesce(s.input_summary,'')) LIKE '%'||?IDX||'%' OR lower(coalesce(s.process_summary,'')) LIKE '%'||?IDX||'%' OR lower(coalesce(s.output_summary,'')) LIKE '%'||?IDX||'%' OR lower(coalesce(s.tags,'')) LIKE '%'||?IDX||'%'";
+        let fields="lower(s.name) LIKE '%'||?IDX||'%' OR lower(s.qualified_name) LIKE '%'||?IDX||'%' OR lower(f.path) LIKE '%'||?IDX||'%' OR lower(coalesce(s.signature,'')) LIKE '%'||?IDX||'%' OR lower(coalesce(s.description,'')) LIKE '%'||?IDX||'%' OR lower(coalesce(s.input_summary,'')) LIKE '%'||?IDX||'%' OR lower(coalesce(s.process_summary,'')) LIKE '%'||?IDX||'%' OR lower(coalesce(s.output_summary,'')) LIKE '%'||?IDX||'%' OR lower(coalesce(s.tags,'')) LIKE '%'||?IDX||'%' OR lower(coalesce(s.doc,'')) LIKE '%'||?IDX||'%'";
         // Any token may match, and coverage decides the rank. An AND over every word
         // returns nothing for the way people actually ask ("audio callback" vs `audio_cb`),
         // which measured as the dominant failure: 8 of 14 real questions came back empty.
@@ -194,8 +219,13 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
         // stem = the token's first STEM_LEN characters; short words stay whole
         let stems:Vec<String>=tokens.iter().map(|t|if t.chars().count()>=6 { t.chars().take(STEM_LEN).collect() } else { t.clone() }).collect();
         let mut values=vec![term];values.extend(tokens.clone());values.extend(stems); let mut st=self.db.prepare(&sql).map_err(|e|e.to_string())?;
-        let rows = st.query_map(rusqlite::params_from_iter(values.iter()),|r|Ok(SearchResult{symbol:r.get(0)?,qualified_name:r.get(1)?,kind:r.get(2)?,file:r.get(3)?,start_line:r.get::<_,i64>(4)? as usize,end_line:r.get::<_,i64>(5)? as usize,score:r.get(6)?,marked:false,body_lines:0,oversized:false,anchor:None,window:[0,0]})).map_err(|e|e.to_string())?;
+        let rows = st.query_map(rusqlite::params_from_iter(values.iter()),|r|Ok(SearchResult{symbol:r.get(0)?,qualified_name:r.get(1)?,kind:r.get(2)?,file:r.get(3)?,start_line:r.get::<_,i64>(4)? as usize,end_line:r.get::<_,i64>(5)? as usize,score:r.get(6)?,marked:false,body_lines:0,oversized:false,anchor:None,notes:Vec::new(),window:[0,0]})).map_err(|e|e.to_string())?;
         for row in rows { let r=row.map_err(|e|e.to_string())?; if seen.insert(format!("{}:{}",r.file,r.start_line)) { out.push(r); } }
+        for note in self.notes_for_query(&tokens)? {
+            out.push(SearchResult{symbol:note.phrase.chars().take(48).collect(),qualified_name:format!("note:{} \"{}\"",note.kind,note.phrase),kind:format!("note:{}",note.kind),
+                file:note.target.clone().unwrap_or_default(),start_line:0,end_line:0,score:0.97,marked:true,body_lines:0,oversized:false,
+                anchor:Some(note.body.lines().next().unwrap_or("").chars().take(90).collect()),notes:vec![note],window:[0,0]});
+        }
         out.extend(self.anchor_hits(&tokens)?);
         out.extend(self.literal_hits(&tokens)?);
         // a body too large to retrieve or describe as one unit is a navigation hazard, not a hit
@@ -211,7 +241,9 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
             if is_symbol && !r.marked && r.body_lines>READ_WINDOW { r.score*=(READ_WINDOW as f64/r.body_lines as f64).powf(0.15); }
         }
         let mut seen_line=HashSet::new();
-        out.retain(|r| seen_line.insert(format!("{}:{}",r.file,r.start_line)));
+        out.retain(|r| r.kind.starts_with("note:") || seen_line.insert(format!("{}:{}",r.file,r.start_line)));
+        // an invariant nobody reads is an invariant nobody wrote: attach it to the hit
+        for r in &mut out { if r.notes.is_empty() && !r.kind.starts_with("note:") { r.notes=self.notes_for_symbol(&r.qualified_name)?; } }
         out.sort_by(|a,b| b.marked.cmp(&a.marked).then(b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)).then(a.qualified_name.cmp(&b.qualified_name)));
         out.truncate(30); Ok(out)
     }
@@ -249,7 +281,7 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
                 if flat(&label).contains(&phrase) || flat(&name).contains(&phrase) || flat(&cond).contains(&phrase) { score=(score+0.15).min(1.0); }
             }
             out.push(SearchResult{symbol:name.clone(),qualified_name:format!("{parent} → {name}"),kind:format!("block:{kind}"),file:path,start_line:start as usize,end_line:end as usize,
-                score:(score*ANCHOR_WEIGHT).min(0.9),marked:false,body_lines:0,oversized:false,anchor:Some(format!("{parent} → {name}")),window:[0,0]});
+                score:(score*ANCHOR_WEIGHT).min(0.9),marked:false,body_lines:0,oversized:false,anchor:Some(format!("{parent} → {name}")),notes:Vec::new(),window:[0,0]});
         }
         Ok(out)
     }
@@ -276,8 +308,97 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
             if score<0.25 { continue }
             if !seen.insert(format!("{path}:{line}")) { continue }
             out.push(SearchResult{symbol:value.chars().take(48).collect(),qualified_name:format!("\"{}\"",value.chars().take(48).collect::<String>()),kind:format!("literal:{kind}"),file:path,start_line:line as usize,end_line:line as usize,
-                score,marked:false,body_lines:0,oversized:false,anchor:if anchor.is_empty(){Some(parent)}else{Some(anchor)},window:[0,0]});
+                score,marked:false,body_lines:0,oversized:false,anchor:if anchor.is_empty(){Some(parent)}else{Some(anchor)},notes:Vec::new(),window:[0,0]});
             let _=normalized;
+        }
+        Ok(out)
+    }
+
+    /// Record knowledge no scanner can recover: how to reproduce a bug, why a symptom
+    /// happened, an invariant, a hypothesis already disproved, a method. Stamped with
+    /// the commit and the target file's hash, so a later read can say "this was true
+    /// two hundred commits ago".
+    pub fn add_note(&self,phrase:&str,body:&str,kind:&str,target:Option<&str>,aliases:&[String])->std::result::Result<usize,String>{
+        let body=body.trim();
+        if body.is_empty() { return Err("note body is empty".into()) }
+        let resolved=match target { Some(t)=>Some(self.resolve_place(t)?), None=>None };
+        let target_hash=match &resolved { Some(t)=>self.hash_of_place(t), None=>None };
+        let commit=std::process::Command::new("git").args(["-C",&self.root.display().to_string(),"rev-parse","--short","HEAD"]).output().ok()
+            .filter(|o|o.status.success()).map(|o|String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s|!s.is_empty());
+        let mut written=0;
+        for phrase in std::iter::once(phrase.to_string()).chain(aliases.iter().cloned()) {
+            let key=mark_key(&phrase);
+            if key.is_empty() { continue }
+            self.db.execute("INSERT INTO notes(kind,query_key,phrase,body,target,target_hash,commit_sha) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(query_key,kind,body) DO UPDATE SET phrase=excluded.phrase,target=excluded.target,target_hash=excluded.target_hash,commit_sha=excluded.commit_sha",
+                params![kind,key,phrase.trim(),body,resolved,target_hash,commit]).map_err(|e|e.to_string())?;
+            written+=1;
+        }
+        Ok(written)
+    }
+    /// What both marks and notes consider "a place": a symbol, a file, or file:line.
+    fn resolve_place(&self,target:&str)->std::result::Result<String,String>{
+        match self.find(target) { Ok((_,qn))=>Ok(qn), Err(_)=>{
+            let (path,line)=match target.split_once(':'){Some((p,l))=>(p,Some(l)),None=>(target,None)};
+            let hit:Option<String>=self.db.query_row("SELECT path FROM files WHERE path=?1 OR path LIKE '%'||?1 ORDER BY length(path) LIMIT 1",params![path],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+            match hit { Some(p)=>Ok(match line{Some(l)=>format!("{p}:{l}"),None=>p}), None=>Err(format!("'{target}' is not a known symbol or file (run `fdml index` first)")) } } }
+    }
+    fn hash_of_place(&self,place:&str)->Option<String>{
+        let path=place.split(':').next().unwrap_or(place);
+        self.db.query_row("SELECT content_hash FROM files WHERE path=?1",params![path],|r|r.get(0)).optional().ok().flatten()
+            .or_else(||self.db.query_row("SELECT f.content_hash FROM symbols s JOIN files f ON f.id=s.file_id WHERE s.qualified_name=?1 LIMIT 1",params![place],|r|r.get(0)).optional().ok().flatten())
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn row_to_note(&self,kind:String,phrase:String,body:String,target:Option<String>,target_hash:Option<String>,commit_sha:Option<String>,created_at:String)->Note{
+        // stale = the file this note points at changed since the note was written
+        let stale=match (&target,&target_hash) { (Some(t),Some(h))=>self.hash_of_place(t).map(|n|&n!=h).unwrap_or(false), _=>false };
+        Note{kind,phrase,body,target,commit_sha,created_at,stale}
+    }
+    /// Notes whose wording overlaps the query — the same lexical rule as marks.
+    pub fn notes_for_query(&self,tokens:&[String])->std::result::Result<Vec<Note>,String>{
+        let mut st=self.db.prepare("SELECT kind,query_key,phrase,body,target,target_hash,commit_sha,created_at FROM notes").map_err(|e|e.to_string())?;
+        let rows:Vec<(String,String,String,String,Option<String>,Option<String>,Option<String>,String)>=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).map_err(|e|e.to_string())?.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())?;
+        let want:HashSet<&str>=tokens.iter().map(String::as_str).collect();
+        let mut out=Vec::new(); let mut seen=HashSet::new();
+        for (kind,key,phrase,body,target,hash,commit,at) in rows {
+            let have:HashSet<&str>=key.split(' ').filter(|t|!t.is_empty()).collect();
+            if !(have==want||want.is_subset(&have)||have.is_subset(&want)) { continue }
+            if !seen.insert(format!("{kind}|{body}")) { continue }
+            out.push(self.row_to_note(kind,phrase,body,target,hash,commit,at));
+        }
+        Ok(out)
+    }
+    /// Notes anchored to a symbol, for inline surfacing next to its search hit.
+    pub fn notes_for_symbol(&self,qn:&str)->std::result::Result<Vec<Note>,String>{
+        let mut st=self.db.prepare("SELECT kind,phrase,body,target,target_hash,commit_sha,created_at FROM notes WHERE target=?1 OR target LIKE ?1||':%' GROUP BY body ORDER BY created_at DESC LIMIT 3").map_err(|e|e.to_string())?;
+        let rows:Vec<(String,String,String,Option<String>,Option<String>,Option<String>,String)>=st.query_map(params![qn],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).map_err(|e|e.to_string())?.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())?;
+        Ok(rows.into_iter().map(|(k,p,b,t,h,c,a)|self.row_to_note(k,p,b,t,h,c,a)).collect())
+    }
+    pub fn list_notes(&self,kind:Option<&str>,limit:usize)->std::result::Result<Vec<Note>,String>{
+        let sql=match kind { Some(_)=>"SELECT kind,phrase,body,target,target_hash,commit_sha,created_at FROM notes WHERE kind=?2 GROUP BY body ORDER BY id DESC LIMIT ?1",
+                             None=>"SELECT kind,phrase,body,target,target_hash,commit_sha,created_at FROM notes GROUP BY body ORDER BY id DESC LIMIT ?1" };
+        let mut st=self.db.prepare(sql).map_err(|e|e.to_string())?;
+        let map=|r:&rusqlite::Row<'_>|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,String>(6)?));
+        let rows:Vec<_>=match kind { Some(k)=>st.query_map(params![limit as i64,k],map).map_err(|e|e.to_string())?.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())?,
+                                     None=>st.query_map(params![limit as i64],map).map_err(|e|e.to_string())?.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())? };
+        Ok(rows.into_iter().map(|(k,p,b,t,h,c,a)|self.row_to_note(k,p,b,t,h,c,a)).collect())
+    }
+
+    /// Turn accumulated search failures into permanent marks: for each unresolved
+    /// failure the evidence picker proposes a location; `apply` writes the mark.
+    pub fn heal(&self,host:&str,model:&str,apply:bool,limit:usize,min_fails:usize)->std::result::Result<Vec<HealProposal>,String>{
+        // One failure is noise — a benchmark, a typo, a dead end. A REPEATED failure is
+        // a pattern worth teaching; healing single-shot failures polluted marks.
+        let mut st=self.db.prepare("SELECT query FROM query_log WHERE useful=0 GROUP BY query HAVING count(*)>=?2 ORDER BY MAX(id) DESC LIMIT ?1").map_err(|e|e.to_string())?;
+        let fails:Vec<String>=st.query_map(params![limit as i64,min_fails as i64],|r|r.get(0)).map_err(|e|e.to_string())?.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())?;
+        let mut out=Vec::new();
+        for query in fails {
+            if self.search(&query)?.first().is_some_and(|r|r.score>=USEFUL_SCORE) { continue }
+            let picks=self.llm_fallback(&query,host,model)?;
+            let Some(top)=picks.first() else { continue };
+            let target=format!("{}:{}",top.file,top.start_line);
+            let reason=top.anchor.clone().unwrap_or_default();
+            let applied=apply && self.mark_association(&query,&target).is_ok();
+            out.push(HealProposal{query,target,reason,applied});
         }
         Ok(out)
     }
@@ -286,10 +407,7 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
     /// Marks are stored by name (not row id) so they survive re-indexing.
     pub fn mark_association(&self,query:&str,target:&str)->std::result::Result<String,String>{
         let key=mark_key(query); if key.is_empty(){return Err("mark query is empty".into())}
-        let resolved=match self.find(target){ Ok((_,qn))=>qn, Err(_)=>{
-            let (path,line)=match target.split_once(':'){Some((p,l))=>(p,Some(l)),None=>(target,None)};
-            let hit:Option<String>=self.db.query_row("SELECT path FROM files WHERE path=?1 OR path LIKE '%'||?1 ORDER BY length(path) LIMIT 1",params![path],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
-            match hit { Some(p)=>match line{Some(l)=>format!("{p}:{l}"),None=>p}, None=>return Err(format!("'{target}' is not a known symbol or file (run `fdml index` first)")) } } };
+        let resolved=self.resolve_place(target)?;
         self.db.execute("INSERT INTO marks(query_key,query,target) VALUES(?1,?2,?3) ON CONFLICT(query_key,target) DO UPDATE SET query=excluded.query",params![key,query.trim(),resolved]).map_err(|e|e.to_string())?;
         Ok(resolved)
     }
@@ -311,7 +429,7 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
 
     /// A mark target is a qualified name, a file path, or `path:line`.
     fn resolve_target(&self,target:&str)->std::result::Result<Vec<SearchResult>,String>{
-        let row=|r:&rusqlite::Row<'_>|Ok(SearchResult{symbol:r.get(0)?,qualified_name:r.get(1)?,kind:r.get(2)?,file:r.get(3)?,start_line:r.get::<_,i64>(4)? as usize,end_line:r.get::<_,i64>(5)? as usize,score:1.0,marked:true,body_lines:0,oversized:false,anchor:None,window:[0,0]});
+        let row=|r:&rusqlite::Row<'_>|Ok(SearchResult{symbol:r.get(0)?,qualified_name:r.get(1)?,kind:r.get(2)?,file:r.get(3)?,start_line:r.get::<_,i64>(4)? as usize,end_line:r.get::<_,i64>(5)? as usize,score:1.0,marked:true,body_lines:0,oversized:false,anchor:None,notes:Vec::new(),window:[0,0]});
         let select="SELECT s.name,s.qualified_name,s.kind,f.path,s.start_line,s.end_line FROM symbols s JOIN files f ON f.id=s.file_id";
         let line=target.split_once(':').and_then(|(p,l)|l.parse::<i64>().ok().map(|n|(p.to_string(),n)));
         let (sql,args):(String,Vec<String>)=match &line {
@@ -536,7 +654,7 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
             let Some(i)=pick["evidence"].as_u64().map(|v|v as usize).filter(|v|*v>=1&&*v<=evidence.len()) else { continue };
             let e=&evidence[i-1];
             let reason:String=pick["reason"].as_str().unwrap_or("").chars().take(90).collect();
-            out.push(SearchResult{symbol:e.symbol.clone().unwrap_or_else(||e.file.clone()),qualified_name:e.symbol.clone().unwrap_or_else(||e.file.clone()),kind:"llm-fallback".into(),file:e.file.clone(),start_line:e.line,end_line:e.line,score:0.5,marked:false,body_lines:1,oversized:false,anchor:Some(format!("{model}: {reason}")),window:[e.line.saturating_sub(READ_WINDOW/2).max(1),e.line+READ_WINDOW/2]});
+            out.push(SearchResult{symbol:e.symbol.clone().unwrap_or_else(||e.file.clone()),qualified_name:e.symbol.clone().unwrap_or_else(||e.file.clone()),kind:"llm-fallback".into(),file:e.file.clone(),start_line:e.line,end_line:e.line,score:0.5,marked:false,body_lines:1,oversized:false,anchor:Some(format!("{model}: {reason}")),notes:Vec::new(),window:[e.line.saturating_sub(READ_WINDOW/2).max(1),e.line+READ_WINDOW/2]});
         }
         Ok(out)
     }
@@ -660,6 +778,26 @@ fn normalize_format(value:&str)->String{
     }
     out
 }
+/// The contiguous comment block directly above a declaration, any style
+/// (`//`, `/* */`, `*`, `#`), joined and capped. Language-agnostic on purpose:
+/// one implementation covers every scanner.
+fn doc_above(lines:&[&str],decl_line:usize)->Option<String>{
+    let mut collected:Vec<&str>=Vec::new();
+    let mut i=decl_line.saturating_sub(1);
+    while i>0 {
+        let t=lines.get(i-1)?.trim();
+        let is_comment=t.starts_with("//")||t.starts_with("/*")||t.starts_with('*')||t.starts_with('#')||t.ends_with("*/");
+        if !is_comment { break }
+        collected.push(t);
+        if collected.len()>=12 { break }
+        i-=1;
+    }
+    if collected.is_empty() { return None }
+    collected.reverse();
+    let joined=collected.iter().map(|t|t.trim_start_matches(['/','*','#',' ','\t']).trim_end_matches("*/").trim()).filter(|t|!t.is_empty()).collect::<Vec<_>>().join(" ");
+    if joined.chars().filter(|c|c.is_alphabetic()).count()<8 { return None }
+    Some(joined.chars().take(400).collect())
+}
 fn cqn_key(q:&str)->String{ q.rsplit('.').next().unwrap_or(q).to_string() }
 fn mark_key(q:&str)->String{let mut t:Vec<String>=q.to_lowercase().split(|c:char|!c.is_alphanumeric()&&c!='_').filter(|s|!s.is_empty()).map(str::to_string).collect();t.sort();t.dedup();t.join(" ")}
 fn content_hash(s:&str)->String{let mut h=std::collections::hash_map::DefaultHasher::new();s.hash(&mut h);format!("{:x}",h.finish())}
@@ -782,6 +920,49 @@ mod tests {
         Indexer::index(repo.path()).unwrap();
         let index = RepositoryIndex::open(repo.path()).unwrap();
         assert!(!index.flows("loop_a").unwrap().is_empty());
+    }
+
+    #[test]
+    fn doc_comments_above_symbols_are_searchable() {
+        let repo = TempDir::new().unwrap();
+        // the author already explained the concept — search must see it
+        fs::write(repo.path().join("render.ts"),
+            "// headlight projection: the beam texture is projected from the car lamps\nfunction hl_apply() {\n  return 1;\n}\n").unwrap();
+        Indexer::index(repo.path()).unwrap();
+        let index = RepositoryIndex::open(repo.path()).unwrap();
+        let hits = index.search("headlight beam projection").unwrap();
+        assert!(hits.iter().any(|r| r.symbol == "hl_apply"), "comment text must resolve the concept: {hits:?}");
+        assert!(hits.iter().find(|r| r.symbol == "hl_apply").unwrap().score > 0.5);
+    }
+
+    #[test]
+    fn notes_record_knowledge_that_has_no_address_and_surface_with_their_symbol() {
+        let repo = TempDir::new().unwrap();
+        fs::write(repo.path().join("a.ts"), "function integrate() {\n  return 1;\n}\n").unwrap();
+        Indexer::index(repo.path()).unwrap();
+        let index = RepositoryIndex::open(repo.path()).unwrap();
+
+        // a repro recipe: pure text, no place in the code at all
+        index.add_note("объект дрожит object jitters", "repro: run the sim headless with a fixed seed\ncause: two solvers writing one body", "repro", None, &[]).unwrap();
+        let hits = index.search("object jitters").unwrap();
+        assert_eq!(hits[0].kind, "note:repro");
+        assert!(hits[0].notes[0].body.contains("two solvers"));
+        // the other phrasing finds it too — that is what aliases and bilingual keys are for
+        assert!(!index.search("объект дрожит").unwrap().is_empty());
+
+        // an invariant anchored to a symbol rides along when that symbol is a hit
+        index.add_note("vel derived from momentum", "rb->vel is recomputed each tick; clamping it is dead code", "invariant", Some("integrate"), &["скорость производная".into()]).unwrap();
+        let top = index.search("integrate").unwrap().into_iter().find(|r| r.symbol == "integrate").expect("symbol hit");
+        assert!(top.notes.iter().any(|n| n.kind == "invariant"), "invariant must surface with its symbol");
+        assert!(!top.notes[0].stale, "an unchanged file is not stale");
+
+        // edit the file: the note now warns that it predates the change
+        fs::write(repo.path().join("a.ts"), "function integrate() {\n  return 2;\n}\n").unwrap();
+        Indexer::index(repo.path()).unwrap();
+        let index = RepositoryIndex::open(repo.path()).unwrap();
+        let top = index.search("integrate").unwrap().into_iter().find(|r| r.symbol == "integrate").unwrap();
+        assert!(top.notes.iter().any(|n| n.stale), "a changed file must mark its notes stale");
+        assert_eq!(index.list_notes(Some("repro"), 10).unwrap().len(), 1);
     }
 
     #[test]
