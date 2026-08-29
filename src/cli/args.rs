@@ -286,6 +286,12 @@ pub enum Commands {
         /// Repository root; defaults to the current directory
         #[arg(long)]
         path: Option<String>,
+        /// Results to show (the index keeps more; this is what gets printed)
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+        /// Rich output: read windows, kinds, inline notes (default is grep-shaped)
+        #[arg(long)]
+        long: bool,
         /// Also show the call chains the best match takes part in
         #[arg(long)]
         flow: bool,
@@ -333,6 +339,18 @@ pub enum Commands {
         /// List recent notes (optionally of one kind)
         #[arg(long)]
         list: bool,
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Assemble the dossier of a change: everything recorded against one commit
+    Dossier {
+        /// Commit sha as recorded on the notes (short form, e.g. 58e2781); defaults to HEAD
+        commit: Option<String>,
         /// Repository root; defaults to the current directory
         #[arg(long)]
         path: Option<String>,

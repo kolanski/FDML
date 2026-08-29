@@ -55,6 +55,10 @@ const PARTIAL_LITERAL: f64 = 0.4;
 /// words -> place. Optionally anchored to a symbol so it surfaces alongside it.
 #[derive(Debug, Serialize, Clone)] pub struct Note { pub kind: String, pub phrase: String, pub body: String, pub target: Option<String>, pub commit_sha: Option<String>, pub created_at: String, pub stale: bool }
 /// One failed query turned into a proposed mark.
+/// Everything recorded against one commit, gathered into one card: the change's
+/// dossier. Not a new store — a view over notes, marks and the call graph, keyed
+/// by the commit they were written on.
+#[derive(Debug, Serialize)] pub struct Dossier { pub commit: String, pub anchors: Vec<String>, pub flow: Vec<String>, pub state: Vec<Note>, pub numbers: Vec<Note>, pub rejected: Vec<Note>, pub verify: Vec<Note>, pub symptoms: Vec<String>, pub missing: Vec<String> }
 #[derive(Debug, Serialize)] pub struct HealProposal { pub query: String, pub target: String, pub reason: String, pub applied: bool }
 #[derive(Debug, Serialize)] pub struct SymbolFact { pub provider: String, pub target: String, pub fact_kind: String, pub payload: serde_json::Value, pub confidence: String }
 #[derive(Debug, Serialize)] pub struct ImpactGraph { pub symbol: String, pub callers: Vec<String>, pub callees: Vec<String>, pub imports: Vec<String>, pub implementations: Vec<String>, pub tests: Vec<String> }
@@ -381,6 +385,35 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
         let rows:Vec<_>=match kind { Some(k)=>st.query_map(params![limit as i64,k],map).map_err(|e|e.to_string())?.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())?,
                                      None=>st.query_map(params![limit as i64],map).map_err(|e|e.to_string())?.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())? };
         Ok(rows.into_iter().map(|(k,p,b,t,h,c,a)|self.row_to_note(k,p,b,t,h,c,a)).collect())
+    }
+
+    /// Assemble the dossier for a commit: which symbols it anchored, how execution
+    /// reaches them, what invariants and numbers were recorded, what was rejected,
+    /// how it was verified, and which symptoms name it. Reports what is MISSING too —
+    /// a card with holes is more useful than a card that pretends to be complete.
+    pub fn dossier(&self,commit:&str)->std::result::Result<Dossier,String>{
+        let mut st=self.db.prepare("SELECT kind,phrase,body,target,target_hash,commit_sha,created_at FROM notes WHERE coalesce(commit_sha,'')=?1 ORDER BY id").map_err(|e|e.to_string())?;
+        let notes:Vec<Note>=st.query_map(params![commit],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,String>(6)?)))
+            .map_err(|e|e.to_string())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())?
+            .into_iter().map(|(k,p,b,t,h,c,a)|self.row_to_note(k,p,b,t,h,c,a)).collect();
+        // aliases store the same body under several phrasings — a card shows each fact once
+        let of=|kind:&str|{ let mut seen=HashSet::new();
+            notes.iter().filter(|n|n.kind==kind).filter(|n|seen.insert(n.body.clone())).cloned().collect::<Vec<_>>() };
+        // anchors: every symbol these notes point at, plus marks aiming at the same places
+        let mut anchors:Vec<String>=Vec::new();
+        for t in notes.iter().filter_map(|n|n.target.clone()) { if !anchors.contains(&t) { anchors.push(t) } }
+        // flow: the call chain of the first anchored symbol — computed, never stored
+        let flow=anchors.iter().find_map(|a|self.flows(a).ok().and_then(|f|f.into_iter().next()))
+            .map(|f|{let mut c=f.chain.clone(); c.extend(f.next.iter().take(2).cloned()); c}).unwrap_or_default();
+        // symptoms are the opposite: every phrasing matters, it is how people will ask
+        let symptoms=notes.iter().filter(|n|n.kind=="postmortem"||n.kind=="repro").map(|n|n.phrase.clone()).collect::<Vec<_>>();
+        let mut missing=Vec::new();
+        if anchors.is_empty() { missing.push("ANCHOR — no note is attached to a symbol (`--at`)".into()) }
+        if of("invariant").is_empty() { missing.push("STATE/NUMBERS — no invariant recorded (`--kind invariant`)".into()) }
+        if of("rejected").is_empty() { missing.push("REJECTED — nothing recorded as tried-and-wrong (`--kind rejected`)".into()) }
+        if of("method").is_empty() { missing.push("VERIFY — no check recorded (`--kind method`)".into()) }
+        if symptoms.is_empty() { missing.push("SYMPTOMS — no postmortem or repro (`--kind postmortem`)".into()) }
+        Ok(Dossier{commit:commit.to_string(),anchors,flow,state:of("invariant"),numbers:of("note"),rejected:of("rejected"),verify:of("method"),symptoms,missing})
     }
 
     /// Turn accumulated search failures into permanent marks: for each unresolved
@@ -920,6 +953,36 @@ mod tests {
         Indexer::index(repo.path()).unwrap();
         let index = RepositoryIndex::open(repo.path()).unwrap();
         assert!(!index.flows("loop_a").unwrap().is_empty());
+    }
+
+    #[test]
+    fn dossier_gathers_a_commit_and_names_its_holes() {
+        let repo = TempDir::new().unwrap();
+        fs::write(repo.path().join("a.ts"), "function entry() {\n  body_contact();\n}\nfunction body_contact() {\n  return 1;\n}\n").unwrap();
+        Indexer::index(repo.path()).unwrap();
+        let index = RepositoryIndex::open(repo.path()).unwrap();
+
+        // an empty dossier must still be useful: it says what is missing
+        let empty = index.dossier("deadbee").unwrap();
+        assert!(empty.anchors.is_empty());
+        assert_eq!(empty.missing.len(), 5, "every unfilled section is reported: {:?}", empty.missing);
+
+        // record a change the way a session actually would
+        index.add_note("объект проваливается sinks through ground", "ground contact used 8 body corners", "postmortem", Some("body_contact"), &[]).unwrap();
+        index.add_note("vel is derived", "pos is pushed out; impulse via lin_mom; vel untouched", "invariant", Some("body_contact"), &[]).unwrap();
+        index.add_note("spring clamp", "clamping spring force made the car float — rejected", "rejected", None, &[]).unwrap();
+        index.add_note("regression check", "run the physics regression: same two metrics miss as on HEAD", "method", None, &[]).unwrap();
+
+        // notes carry the commit they were written on; the dossier keys on it
+        let commit: String = index.db.query_row("SELECT coalesce(commit_sha,'') FROM notes LIMIT 1", [], |r| r.get(0)).unwrap();
+        let d = index.dossier(&commit).unwrap();
+        assert!(d.anchors.iter().any(|a| a.ends_with("body_contact")));
+        assert!(d.flow.iter().any(|f| f.ends_with("entry")), "flow is computed, not stored: {:?}", d.flow);
+        assert_eq!(d.state.len(), 1);
+        assert_eq!(d.rejected.len(), 1);
+        assert_eq!(d.verify.len(), 1);
+        assert_eq!(d.symptoms.len(), 1);
+        assert!(d.missing.is_empty(), "a complete card reports no holes: {:?}", d.missing);
     }
 
     #[test]
