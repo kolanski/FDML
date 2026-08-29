@@ -89,6 +89,42 @@ just learned, a hypothesis you burned an hour disproving. `fdml search` returns
 matching notes on their own, and a note anchored with `--at` appears inline under
 that symbol's hit as `↳ [invariant] …`.
 
+### Choosing a kind — the distinctions that actually matter
+
+| kind | it holds | test |
+|---|---|---|
+| `postmortem` | the **symptom** and what turned out to cause it | would someone hit this and be confused? |
+| `invariant` | the **fact underneath** — a rule about the code or data that will bite again | anchor it with `--at`; it must surface on its own |
+| `rejected` | a hypothesis that was **wrong** | do not put true-but-unapplied knowledge here |
+| `pending` | knowledge that is **true and measured, but the change was reverted** | say what it is and what it must return with |
+| `repro` | how to make a problem observable — including how to build and run | a person with a clean checkout can follow it |
+| `method` | how to verify a claim — **must carry the expected number** | without a number it is not a check |
+| `link` | a decision that lives outside the code | roadmap, PR, ADR, ticket |
+
+Split symptom from fact: "the thing gets pushed out of place" is a `postmortem`,
+while "the bounding box includes the wheels, so its floor sits below zero" is an
+`invariant` — the second will bite in any task touching those dimensions, so it
+needs `--at` and a life of its own.
+
+`rejected` and `pending` are opposites, and confusing them is expensive: `rejected`
+means *do not do this*, `pending` means *this is right, put it back together with X*.
+
+**When to use `--at`:** anchor when the rule matters to whoever opens that code —
+invariants, traps, gotchas — so it appears inline with the symbol. Leave it off when
+the entry point is the symptom itself (`repro`, `method`, `link`): those are reached
+by words, not by a symbol.
+
+Use `--kind link` for anything that lives outside the code and explains a
+decision — a roadmap section, a PR, an ADR, a design doc, a ticket:
+
+```bash
+fdml note "куда идёт индекс роадмап" "docs/navigator.md §8 — очередь работ" --kind link
+fdml note "why the value graph is shaped this way" "PR #20" --kind link
+```
+
+Then "what's next here?" returns the pointer instead of a guess, and the links
+show up in `fdml dossier` alongside the change they belong to.
+
 Name a note by the **symptom itself** («всё пересвечено», "the car jitters"), not by
 a question ("почему всё пересвечено"). Question words are ignored when matching, so
 both forms find it — but the symptom is what other people will type. Wrong wording is

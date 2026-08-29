@@ -72,7 +72,17 @@ impl CommandRunner {
 
     fn run_index_search(&self, query: String, path: Option<String>, limit: usize, long: bool, flow: bool, llm: bool, model: String, ollama_url: String, json: bool) -> Result<()> {
         let root = Self::index_root(path)?;
-        let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        let mut index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        // Self-healing beats a watcher: a stat per file is cheap, an incremental
+        // reindex is milliseconds, and an answer from a stale index is worse than a
+        // slow one. No daemon to keep alive, no hook to configure per repository.
+        let stale = index.stale_files();
+        if stale > 0 {
+            drop(index);
+            let report = crate::index::Indexer::index(&root).map_err(crate::error::FdmlError::project_error)?;
+            if !json { println!("(reindexed {} file(s) — the index was behind the code)", report.parsed_files.max(stale)); }
+            index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        }
         let mut results = index.search(&query).map_err(crate::error::FdmlError::project_error)?;
         // M2: the honest signal. Below the threshold the deterministic layer says so —
         // and only then may the experimental LLM fallback spend its seconds.
@@ -97,6 +107,7 @@ impl CommandRunner {
             println!("{}", serde_json::to_string_pretty(&payload).unwrap());
         } else {
             if !useful && !results.iter().any(|r| r.kind == "llm-fallback") {
+                // an empty answer from a stale index is not an answer — say which it is
                 println!("⚠ no useful result{} — fall back to grep{}\n", results.first().map(|r| format!(" (top score {:.2})", r.score)).unwrap_or_default(), if llm { "" } else { ", or retry with --llm" });
             }
             for r in &results {
@@ -104,6 +115,9 @@ impl CommandRunner {
                     // the location to read comes first: that is what the caller does next
                     println!("{}:{}  read {}-{}{}", r.file, r.start_line, r.window[0], r.window[1], if r.marked { "  [marked]" } else { "" });
                     println!("{}  {}  score: {:.2}", r.qualified_name, r.kind, r.score);
+                } else if r.file.is_empty() {
+                    // a note with no anchor has no place to point at; name it instead
+                    println!("{}", r.qualified_name);
                 } else {
                     // grep shape: one line per hit, `path:line: source`. An agent reaching
                     // for grep out of habit gets the same silhouette, for fewer bytes.
@@ -209,6 +223,8 @@ impl CommandRunner {
         block("NOTE", &d.numbers);
         block("REJECTED", &d.rejected);
         block("VERIFY", &d.verify);
+        block("PENDING", &d.pending);
+        block("LINKS", &d.links);
         for (i, s) in d.symptoms.iter().enumerate() { println!("{:<9}«{s}»", if i == 0 { "SYMPTOMS" } else { "" }); }
         if !d.missing.is_empty() {
             println!("
