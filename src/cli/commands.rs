@@ -45,7 +45,7 @@ impl CommandRunner {
             Commands::Index { path } => self.run_index(path),
             Commands::Search { query, path, limit, long, flow, llm, model, ollama_url, json } => self.run_index_search(query, path, limit, long, flow, llm, model, ollama_url, json),
             Commands::Get { symbol, path, json } => self.run_index_get(symbol, path, json),
-            Commands::Note { phrase, body, kind, target, aliases, list, path, json } => self.run_note(phrase, body, kind, target, aliases, list, path, json),
+            Commands::Note { phrase, body, kind, target, aliases, list, delete, path, json } => self.run_note(phrase, body, kind, target, aliases, list, delete, path, json),
             Commands::Dossier { commit, path, json } => self.run_dossier(commit, path, json),
             Commands::Heal { apply, limit, min_fails, model, ollama_url, path, json } => self.run_heal(apply, limit, min_fails, model, ollama_url, path, json),
             Commands::Skill { install, global, path } => self.run_skill(install, global, path),
@@ -122,14 +122,16 @@ impl CommandRunner {
 
     fn run_index_get(&self, symbol: String, path: Option<String>, json: bool) -> Result<()> {
         let root = Self::index_root(path)?;
-        let source = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?.get(&symbol).map_err(crate::error::FdmlError::project_error)?;
+        let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        let source = index.get(&symbol).map_err(crate::error::FdmlError::project_error)?;
+        let _ = index.log_command("get", &symbol, None, 1, true, false, false);
         if json { println!("{}", serde_json::to_string_pretty(&source).unwrap()); }
         else { println!("{}\n{}:{}-{}\n{}\n{}", source.qualified_name, source.file, source.start_line, source.end_line, source.signature.as_deref().unwrap_or(""), source.source); }
         Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn run_note(&self, phrase: Option<String>, body: Option<String>, kind: String, target: Option<String>, aliases: Vec<String>, list: bool, path: Option<String>, json: bool) -> Result<()> {
+    fn run_note(&self, phrase: Option<String>, body: Option<String>, kind: String, target: Option<String>, aliases: Vec<String>, list: bool, delete: bool, path: Option<String>, json: bool) -> Result<()> {
         let root = Self::index_root(path)?;
         let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
         let show = |notes: &[crate::index::Note]| {
@@ -140,14 +142,23 @@ impl CommandRunner {
                     n.commit_sha.as_ref().map(|c| format!("  · commit {c}")).unwrap_or_default());
             }
         };
+        if delete {
+            let phrase = phrase.ok_or_else(|| crate::error::FdmlError::project_error("give the phrase of the note to delete"))?;
+            let n = index.delete_notes(&phrase).map_err(crate::error::FdmlError::project_error)?;
+            let _ = index.log_command("note:delete", &phrase, None, n, n > 0, false, false);
+            println!("{}", if n == 0 { format!("no note matches \"{phrase}\"") } else { format!("Deleted {n} row(s) for \"{phrase}\"") });
+            return Ok(());
+        }
         match (phrase, body) {
             (Some(phrase), Some(body)) => {
                 let n = index.add_note(&phrase, &body, &kind, target.as_deref(), &aliases).map_err(crate::error::FdmlError::project_error)?;
+                let _ = index.log_command(&format!("note:{kind}"), &phrase, None, n, true, false, false);
                 println!("Recorded {kind} \"{phrase}\"{} ({n} phrasing{})", target.map(|t| format!(" @ {t}")).unwrap_or_default(), if n == 1 { "" } else { "s" });
             }
             (Some(query), None) if !list => {
                 let tokens: Vec<String> = query.to_lowercase().split(|c: char| !c.is_alphanumeric() && c != '_').filter(|t| !t.is_empty()).map(str::to_string).collect();
                 let notes = index.notes_for_query(&tokens).map_err(crate::error::FdmlError::project_error)?;
+                let _ = index.log_command("note:read", &query, None, notes.len(), !notes.is_empty(), false, false);
                 if json { println!("{}", serde_json::to_string_pretty(&notes).unwrap()); }
                 else if notes.is_empty() { println!("no note matches \"{query}\" — record one with `fdml note \"<symptom>\" \"<what you learned>\"`"); }
                 else { show(&notes); }
@@ -180,6 +191,7 @@ impl CommandRunner {
                 .filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
         });
         let d = index.dossier(&commit).map_err(crate::error::FdmlError::project_error)?;
+        let _ = index.log_command("dossier", &commit, None, d.anchors.len(), d.missing.is_empty(), false, false);
         if json { println!("{}", serde_json::to_string_pretty(&d).unwrap()); return Ok(()); }
         let block = |label: &str, notes: &[crate::index::Note]| {
             for (i, n) in notes.iter().enumerate() {
@@ -211,6 +223,7 @@ MISSING — the card has holes, which is worth knowing:");
         let root = Self::index_root(path)?;
         let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
         let proposals = index.heal(&ollama_url, &model, apply, limit, min_fails).map_err(crate::error::FdmlError::project_error)?;
+        let _ = index.log_command(if apply { "heal:apply" } else { "heal" }, "", None, proposals.len(), !proposals.is_empty(), true, proposals.iter().any(|p| p.applied));
         if json { println!("{}", serde_json::to_string_pretty(&proposals).unwrap()); return Ok(()); }
         if proposals.is_empty() { println!("nothing to heal — no repeated unresolved failures, or no evidence found"); return Ok(()); }
         for p in &proposals {
@@ -262,7 +275,12 @@ MISSING — the card has holes, which is worth knowing:");
                 "retry_episodes": episodes}));
         } else {
             let rate = if total > 0 { 100 - 100 * failed / total } else { 0 };
-            println!("queries: {total}   useful: {rate}%   failed: {failed}   llm fallback: {llm_used} fired / {llm_rescued} rescued\n");
+            println!("searches: {total}   useful: {rate}%   failed: {failed}   llm fallback: {llm_used} fired / {llm_rescued} rescued");
+            let usage = index.command_usage().unwrap_or_default();
+            if usage.len() > 1 {
+                println!("commands: {}", usage.iter().map(|(c, n)| format!("{c} {n}")).collect::<Vec<_>>().join("  "));
+            }
+            println!();
             if fails.is_empty() { println!("no failed queries accumulated — nothing to improve yet"); }
             else { println!("CASES (failed queries — what this project needs the tool to learn):"); for (q, n, at) in &fails { println!("  x{n:<3} {q}   (last: {at})"); } }
             if !episodes.is_empty() {
@@ -280,6 +298,7 @@ MISSING — the card has holes, which is worth knowing:");
             let text = std::fs::read_to_string(&file).map_err(|e| crate::error::FdmlError::project_error(format!("Cannot read '{file}': {e}")))?;
             let doc: serde_json::Value = serde_json::from_str(&text).map_err(|e| crate::error::FdmlError::project_error(format!("'{file}' is not valid JSON: {e}")))?;
             let (kept, skipped) = index.import_facts(&doc, &provider).map_err(crate::error::FdmlError::project_error)?;
+            let _ = index.log_command("facts:import", &provider, None, kept, kept > 0, false, false);
             println!("Imported {kept} facts from {file}{}", if skipped > 0 { format!(" ({skipped} entries had no identifiable target)") } else { String::new() });
             return Ok(());
         }
@@ -293,7 +312,9 @@ MISSING — the card has holes, which is worth knowing:");
 
     fn run_index_outline(&self, symbol: String, path: Option<String>, json: bool) -> Result<()> {
         let root = Self::index_root(path)?;
-        let outline = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?.outline(&symbol).map_err(crate::error::FdmlError::project_error)?;
+        let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        let outline = index.outline(&symbol).map_err(crate::error::FdmlError::project_error)?;
+        let _ = index.log_command("outline", &symbol, None, outline.phases.len(), !outline.phases.is_empty(), false, false);
         if json { println!("{}", serde_json::to_string_pretty(&outline).unwrap()); }
         else {
             println!("{}\n{}:{}-{}  {} lines, {} internal call sites, {} phases\n", outline.symbol, outline.file, outline.start_line, outline.end_line, outline.body_lines, outline.call_sites, outline.phases.len());
@@ -307,7 +328,9 @@ MISSING — the card has holes, which is worth knowing:");
 
     fn run_index_impact(&self, symbol: String, path: Option<String>, json: bool) -> Result<()> {
         let root = Self::index_root(path)?;
-        let impact = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?.impact(&symbol).map_err(crate::error::FdmlError::project_error)?;
+        let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        let impact = index.impact(&symbol).map_err(crate::error::FdmlError::project_error)?;
+        let _ = index.log_command("impact", &symbol, None, impact.callers.len() + impact.callees.len(), true, false, false);
         if json { println!("{}", serde_json::to_string_pretty(&impact).unwrap()); }
         else { println!("{}\n\nCALLERS\n{}\n\nCALLEES / DEPENDS ON\n{}\n\nIMPORTS\n{}\n\nIMPLEMENTATIONS\n{}\n\nTESTS\n{}", impact.symbol, impact.callers.join("\n"), impact.callees.join("\n"), impact.imports.join("\n"), impact.implementations.join("\n"), impact.tests.join("\n")); }
         Ok(())
@@ -328,6 +351,7 @@ MISSING — the card has holes, which is worth knowing:");
             (Some(query), Some(symbol)) => {
                 let target = index.mark_association(&query, &symbol).map_err(crate::error::FdmlError::project_error)?;
                 println!("Marked \"{query}\" -> {target}");
+                let _ = index.log_command("mark", &query, None, 1 + aliases.len(), true, false, false);
                 // one place, several ways to ask for it — the lexical key needs each
                 for alias in &aliases {
                     index.mark_association(alias, &target).map_err(crate::error::FdmlError::project_error)?;

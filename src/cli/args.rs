@@ -339,6 +339,9 @@ pub enum Commands {
         /// List recent notes (optionally of one kind)
         #[arg(long)]
         list: bool,
+        /// Delete the note(s) matching this phrase — typos should not need sqlite
+        #[arg(long)]
+        delete: bool,
         /// Repository root; defaults to the current directory
         #[arg(long)]
         path: Option<String>,

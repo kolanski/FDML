@@ -20,6 +20,10 @@ const OVERSIZED_BODY_LINES: usize = 300;
 /// Call sites further apart than this start a new phase in an outline. Matches the
 /// ~40-line window agents actually read around an anchor.
 const PHASE_GAP_LINES: i64 = 40;
+/// Connective words carry no signal but dilute a lexical key: "почему всё белое и
+/// пересвечено" must still reach a note keyed "всё пересвечено". Filtered on the
+/// query side only — a note may legitimately contain them in its phrasing.
+const STOPWORDS: &[&str] = &["почему","что","как","где","куда","зачем","когда","это","этот","эта","при","для","из","на","в","и","или","не","бы","же","ли","то","так","the","a","an","why","what","how","where","when","is","are","was","were","and","or","not","of","in","on","for","to","do","does","did"];
 /// Prefix length used to match a query word against a differently-spelled identifier.
 const STEM_LEN: usize = 4;
 /// Lines an agent actually reads around a hit (measured: 34-49).
@@ -118,7 +122,9 @@ CREATE TABLE IF NOT EXISTS literal_occurrences(id INTEGER PRIMARY KEY,file_id IN
 CREATE INDEX IF NOT EXISTS literals_value ON literal_occurrences(value);
 CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,query_key TEXT NOT NULL,phrase TEXT NOT NULL,body TEXT NOT NULL,target TEXT,target_hash TEXT,commit_sha TEXT,created_at TEXT NOT NULL DEFAULT (datetime('now')),UNIQUE(query_key,kind,body));
 CREATE INDEX IF NOT EXISTS notes_target ON notes(target);
-CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,top_score REAL,results INTEGER NOT NULL,useful INTEGER NOT NULL,llm_used INTEGER NOT NULL DEFAULT 0,llm_rescued INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT (datetime('now')));").map_err(|e|e.to_string())?;
+CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,top_score REAL,results INTEGER NOT NULL,useful INTEGER NOT NULL,llm_used INTEGER NOT NULL DEFAULT 0,llm_rescued INTEGER NOT NULL DEFAULT 0,command TEXT NOT NULL DEFAULT 'search',created_at TEXT NOT NULL DEFAULT (datetime('now')));").map_err(|e|e.to_string())?;
+        // Existing logs predate per-command telemetry; give them the column.
+        let _ = db.execute("ALTER TABLE query_log ADD COLUMN command TEXT NOT NULL DEFAULT 'search'", []);
         // Forward-compatible migration for indexes created before local marking.
         for column in ["doc TEXT", "name_tokens TEXT", "input_summary TEXT", "process_summary TEXT", "output_summary TEXT", "description_model TEXT", "description_version TEXT", "description_hash TEXT", "tags TEXT"] { let _ = db.execute(&format!("ALTER TABLE symbols ADD COLUMN {column}"), []); }
         Ok(Self { root, db })
@@ -361,11 +367,9 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
     pub fn notes_for_query(&self,tokens:&[String])->std::result::Result<Vec<Note>,String>{
         let mut st=self.db.prepare("SELECT kind,query_key,phrase,body,target,target_hash,commit_sha,created_at FROM notes").map_err(|e|e.to_string())?;
         let rows:Vec<(String,String,String,String,Option<String>,Option<String>,Option<String>,String)>=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).map_err(|e|e.to_string())?.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())?;
-        let want:HashSet<&str>=tokens.iter().map(String::as_str).collect();
         let mut out=Vec::new(); let mut seen=HashSet::new();
         for (kind,key,phrase,body,target,hash,commit,at) in rows {
-            let have:HashSet<&str>=key.split(' ').filter(|t|!t.is_empty()).collect();
-            if !(have==want||want.is_subset(&have)||have.is_subset(&want)) { continue }
+            if key_overlap(&key,tokens)<0.5 { continue }
             if !seen.insert(format!("{kind}|{body}")) { continue }
             out.push(self.row_to_note(kind,phrase,body,target,hash,commit,at));
         }
@@ -376,6 +380,17 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
         let mut st=self.db.prepare("SELECT kind,phrase,body,target,target_hash,commit_sha,created_at FROM notes WHERE target=?1 OR target LIKE ?1||':%' GROUP BY body ORDER BY created_at DESC LIMIT 3").map_err(|e|e.to_string())?;
         let rows:Vec<(String,String,String,Option<String>,Option<String>,Option<String>,String)>=st.query_map(params![qn],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).map_err(|e|e.to_string())?.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())?;
         Ok(rows.into_iter().map(|(k,p,b,t,h,c,a)|self.row_to_note(k,p,b,t,h,c,a)).collect())
+    }
+    /// Remove notes by phrase (all phrasings of the same body go together).
+    pub fn delete_notes(&self,phrase:&str)->std::result::Result<usize,String>{
+        let key=mark_key(phrase);
+        let mut st=self.db.prepare("SELECT DISTINCT body FROM notes WHERE query_key=?1 OR phrase=?2").map_err(|e|e.to_string())?;
+        let rows:rusqlite::Result<Vec<String>>=st.query_map(params![key,phrase],|r|r.get(0)).map_err(|e|e.to_string())?.collect();
+        let bodies=rows.map_err(|e|e.to_string())?;
+        drop(st);
+        let mut removed=0;
+        for body in bodies { removed+=self.db.execute("DELETE FROM notes WHERE body=?1",params![body]).map_err(|e|e.to_string())?; }
+        Ok(removed)
     }
     pub fn list_notes(&self,kind:Option<&str>,limit:usize)->std::result::Result<Vec<Note>,String>{
         let sql=match kind { Some(_)=>"SELECT kind,phrase,body,target,target_hash,commit_sha,created_at FROM notes WHERE kind=?2 GROUP BY body ORDER BY id DESC LIMIT ?1",
@@ -421,7 +436,7 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
     pub fn heal(&self,host:&str,model:&str,apply:bool,limit:usize,min_fails:usize)->std::result::Result<Vec<HealProposal>,String>{
         // One failure is noise — a benchmark, a typo, a dead end. A REPEATED failure is
         // a pattern worth teaching; healing single-shot failures polluted marks.
-        let mut st=self.db.prepare("SELECT query FROM query_log WHERE useful=0 GROUP BY query HAVING count(*)>=?2 ORDER BY MAX(id) DESC LIMIT ?1").map_err(|e|e.to_string())?;
+        let mut st=self.db.prepare("SELECT query FROM query_log WHERE useful=0 AND command='search' GROUP BY query HAVING count(*)>=?2 ORDER BY MAX(id) DESC LIMIT ?1").map_err(|e|e.to_string())?;
         let fails:Vec<String>=st.query_map(params![limit as i64,min_fails as i64],|r|r.get(0)).map_err(|e|e.to_string())?.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())?;
         let mut out=Vec::new();
         for query in fails {
@@ -453,8 +468,11 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
         let want:HashSet<&str>=tokens.iter().map(String::as_str).collect();
         let mut out=Vec::new(); let mut seen=HashSet::new();
         for (key,target) in marks {
-            let have:HashSet<&str>=key.split(' ').filter(|t|!t.is_empty()).collect();
-            let score=if have==want {1.0} else if want.is_subset(&have)||have.is_subset(&want) {0.9} else {continue};
+            let overlap=key_overlap(&key,tokens);
+            // half the key present is enough: people ask with spare words, not with the
+            // exact phrase they once recorded
+            if overlap<0.5 { continue }
+            let score=if overlap>=1.0 {1.0} else {0.75+0.15*overlap};
             for mut hit in self.resolve_target(&target)? { hit.score=score; hit.marked=true; if seen.insert(format!("{}:{}",hit.file,hit.start_line)) { out.push(hit); } }
         }
         Ok(out)
@@ -696,7 +714,14 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
     /// Failures are the food of the eternal-tooling-improvement loop — each one is a
     /// case showing where THIS project needs the tool bent toward it.
     pub fn log_query(&self,query:&str,top_score:Option<f64>,results:usize,useful:bool,llm_used:bool,llm_rescued:bool)->std::result::Result<(),String>{
-        self.db.execute("INSERT INTO query_log(query,top_score,results,useful,llm_used,llm_rescued) VALUES(?1,?2,?3,?4,?5,?6)",params![query,top_score,results as i64,useful as i64,llm_used as i64,llm_rescued as i64]).map_err(|e|e.to_string())?; Ok(())
+        self.log_command("search",query,top_score,results,useful,llm_used,llm_rescued)
+    }
+    /// Every command reports through here, so `fdml log` shows the whole loop —
+    /// what was searched, what was taught (marks, notes), what was read (outline,
+    /// flow) — not just the searches.
+    #[allow(clippy::too_many_arguments)]
+    pub fn log_command(&self,command:&str,query:&str,top_score:Option<f64>,results:usize,useful:bool,llm_used:bool,llm_rescued:bool)->std::result::Result<(),String>{
+        self.db.execute("INSERT INTO query_log(command,query,top_score,results,useful,llm_used,llm_rescued) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![command,query,top_score,results as i64,useful as i64,llm_used as i64,llm_rescued as i64]).map_err(|e|e.to_string())?; Ok(())
     }
     /// The accumulated cases: overall hit-rate, recent failures grouped, LLM-fallback
     /// stats, and retry episodes. All passive — no agent feedback required: the verdict
@@ -705,14 +730,14 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
     #[allow(clippy::type_complexity)]
     pub fn query_report(&self,limit:usize)->std::result::Result<(i64,i64,i64,i64,Vec<(String,i64,String)>,Vec<Vec<String>>),String>{
         let count=|sql:&str|self.db.query_row(sql,[],|r|r.get::<_,i64>(0)).map_err(|e|e.to_string());
-        let total=count("SELECT count(*) FROM query_log")?;
-        let failed=count("SELECT count(*) FROM query_log WHERE useful=0")?;
+        let total=count("SELECT count(*) FROM query_log WHERE command='search'")?;
+        let failed=count("SELECT count(*) FROM query_log WHERE command='search' AND useful=0")?;
         let llm_used=count("SELECT count(*) FROM query_log WHERE llm_used=1")?;
         let llm_rescued=count("SELECT count(*) FROM query_log WHERE llm_rescued=1")?;
-        let mut st=self.db.prepare("SELECT query,count(*),max(created_at) FROM query_log WHERE useful=0 GROUP BY query ORDER BY max(id) DESC LIMIT ?1").map_err(|e|e.to_string())?;
+        let mut st=self.db.prepare("SELECT query,count(*),max(created_at) FROM query_log WHERE useful=0 AND command='search' GROUP BY query ORDER BY max(id) DESC LIMIT ?1").map_err(|e|e.to_string())?;
         let rows:rusqlite::Result<Vec<(String,i64,String)>>=st.query_map(params![limit as i64],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?.collect();
         // retry episodes: consecutive failed queries within 90s of each other
-        let mut st=self.db.prepare("SELECT query,useful,strftime('%s',created_at) FROM query_log ORDER BY id DESC LIMIT 200").map_err(|e|e.to_string())?;
+        let mut st=self.db.prepare("SELECT query,useful,strftime('%s',created_at) FROM query_log WHERE command='search' ORDER BY id DESC LIMIT 200").map_err(|e|e.to_string())?;
         let recent:rusqlite::Result<Vec<(String,i64,i64)>>=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get::<_,String>(2)?.parse::<i64>().unwrap_or(0)))).map_err(|e|e.to_string())?.collect();
         let mut recent=recent.map_err(|e|e.to_string())?; recent.reverse();
         let mut episodes:Vec<Vec<String>>=Vec::new(); let mut chain:Vec<String>=Vec::new(); let mut last_ts=0i64;
@@ -725,6 +750,12 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
         Ok((total,failed,llm_used,llm_rescued,rows.map_err(|e|e.to_string())?,episodes))
     }
 
+    /// Which commands actually get used — the adoption half of the picture.
+    pub fn command_usage(&self)->std::result::Result<Vec<(String,i64)>,String>{
+        let mut st=self.db.prepare("SELECT command,count(*) FROM query_log GROUP BY command ORDER BY 2 DESC").map_err(|e|e.to_string())?;
+        let rows:rusqlite::Result<Vec<(String,i64)>>=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?.collect();
+        rows.map_err(|e|e.to_string())
+    }
     pub fn status(&self)->std::result::Result<IndexStatus,String>{let count=|t|self.db.query_row(&format!("SELECT count(*) FROM {t}"),[],|r|r.get::<_,i64>(0)).map_err(|e|e.to_string());Ok(IndexStatus{root_path:self.root.display().to_string(),files:count("files")? as usize,symbols:count("symbols")? as usize,references:count("references_idx")? as usize,marks:count("marks")? as usize,last_indexed:self.db.query_row("SELECT value FROM metadata WHERE key='last_indexed'",[],|r|r.get(0)).optional().map_err(|e|e.to_string())?,index_size:fs::metadata(self.root.join(".fdml/index.sqlite")).map(|m|m.len()).unwrap_or(0)})}
     pub fn mark(&self,model:&str,host:&str,limit:usize,force:bool)->std::result::Result<usize,String>{
         let where_clause=if force { "" } else { "AND (description_hash IS NULL OR description_model != ?1 OR description_version != '2')" };
@@ -832,6 +863,18 @@ fn doc_above(lines:&[&str],decl_line:usize)->Option<String>{
     Some(joined.chars().take(400).collect())
 }
 fn cqn_key(q:&str)->String{ q.rsplit('.').next().unwrap_or(q).to_string() }
+/// How well a query overlaps a stored key. Strict subset matching broke the moment
+/// a question word was added, so this is proportional: shared tokens over the
+/// smaller side, with connectives ignored.
+fn key_overlap(key:&str,tokens:&[String])->f64{
+    let have:HashSet<&str>=key.split(' ').filter(|t|!t.is_empty()).collect();
+    let want:HashSet<&str>=tokens.iter().map(String::as_str).filter(|t|!STOPWORDS.contains(t)).collect();
+    if have.is_empty()||want.is_empty() { return 0.0 }
+    let shared=have.intersection(&want).count();
+    if shared==0 { return 0.0 }
+    if have==want { return 1.0 }
+    shared as f64/have.len().min(want.len()) as f64
+}
 fn mark_key(q:&str)->String{let mut t:Vec<String>=q.to_lowercase().split(|c:char|!c.is_alphanumeric()&&c!='_').filter(|s|!s.is_empty()).map(str::to_string).collect();t.sort();t.dedup();t.join(" ")}
 fn content_hash(s:&str)->String{let mut h=std::collections::hash_map::DefaultHasher::new();s.hash(&mut h);format!("{:x}",h.finish())}
 fn yaml(s:&str)->String{s.replace('\\',"\\\\").replace('"',"\\\"")}
