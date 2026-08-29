@@ -89,6 +89,11 @@ just learned, a hypothesis you burned an hour disproving. `fdml search` returns
 matching notes on their own, and a note anchored with `--at` appears inline under
 that symbol's hit as `↳ [invariant] …`.
 
+Name a note by the **symptom itself** («всё пересвечено», "the car jitters"), not by
+a question ("почему всё пересвечено"). Question words are ignored when matching, so
+both forms find it — but the symptom is what other people will type. Wrong wording is
+not permanent: `fdml note --delete "<phrase>"` removes a note and all its phrasings.
+
 **`⚠ stale` means the file changed since the note was written.** It is not noise and
 not a reason to ignore the note — it is a signal to re-check the claim against the
 current code, and to re-record it if it still holds.
@@ -98,11 +103,11 @@ Three rules, learned the expensive way:
 1. **Prefer a symbol over a file:line.** `world.walls.world_walls_collect` survives
    edits; `walls.c:214` rots the moment lines shift. Use `file:line` only when the
    place is not a symbol (a block inside a huge function, a literal, a comment).
-2. **Mark the wording that actually failed, not the correct term.** Mark keys are
-   lexical: matching is over words, not meaning. A mark named with polished
-   terminology will miss the way people really ask. Take the failed query verbatim
-   from `fdml log` and add live phrasings as `--alias` — including другой язык, if
-   that is how the team asks.
+2. **Mark the wording that actually failed, not the correct term.** Matching is over
+   words, not meaning: connective words are ignored and half the key is enough to
+   hit, but a mark named with polished terminology still misses the way people
+   really ask. Take the failed query verbatim from `fdml log` and add live phrasings
+   as `--alias` — including другой язык, if that is how the team asks.
 3. **Only *mark* things that have an address in this repo — everything else is a
    note, not memory.** A mark points at a place, so it needs one. Knowledge about
    *this* repo that has no place — repro steps, postmortems, invariants, rejected
