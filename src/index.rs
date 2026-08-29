@@ -62,7 +62,15 @@ const PARTIAL_LITERAL: f64 = 0.4;
 /// Everything recorded against one commit, gathered into one card: the change's
 /// dossier. Not a new store — a view over notes, marks and the call graph, keyed
 /// by the commit they were written on.
-#[derive(Debug, Serialize)] pub struct Dossier { pub commit: String, pub anchors: Vec<String>, pub flow: Vec<String>, pub state: Vec<Note>, pub numbers: Vec<Note>, pub rejected: Vec<Note>, pub verify: Vec<Note>, pub pending: Vec<Note>, pub links: Vec<Note>, pub symptoms: Vec<String>, pub missing: Vec<String> }
+#[derive(Debug, Serialize)] pub struct Dossier { pub commit: String, pub anchors: Vec<String>, pub flow: Vec<String>, pub state: Vec<Note>, pub numbers: Vec<Note>, pub rejected: Vec<Note>, pub verify: Vec<Note>, pub playbook: Vec<Note>, pub pending: Vec<Note>, pub links: Vec<Note>, pub symptoms: Vec<String>, pub missing: Vec<String> }
+impl Dossier {
+    /// Nothing was written against this commit — the caller may want an older card.
+    pub fn is_empty(&self)->bool{ self.state.is_empty()&&self.numbers.is_empty()&&self.rejected.is_empty()&&self.verify.is_empty()&&self.playbook.is_empty()&&self.pending.is_empty()&&self.links.is_empty()&&self.symptoms.is_empty() }
+}
+/// A shell shape the agent rebuilt by hand more than once. Repetition is the
+/// signal: the second time you assemble the same script, a tool should have
+/// existed. Deterministic — clustering by shape, no model.
+#[derive(Debug, Serialize)] pub struct ToolCandidate { pub shape: String, pub times: usize, pub example: String, pub last_seen: String }
 #[derive(Debug, Serialize)] pub struct HealProposal { pub query: String, pub target: String, pub reason: String, pub applied: bool }
 #[derive(Debug, Serialize)] pub struct SymbolFact { pub provider: String, pub target: String, pub fact_kind: String, pub payload: serde_json::Value, pub confidence: String }
 #[derive(Debug, Serialize)] pub struct ImpactGraph { pub symbol: String, pub callers: Vec<String>, pub callees: Vec<String>, pub imports: Vec<String>, pub implementations: Vec<String>, pub tests: Vec<String> }
@@ -113,16 +121,16 @@ CREATE TABLE IF NOT EXISTS symbols(id INTEGER PRIMARY KEY,file_id INTEGER NOT NU
 CREATE TABLE IF NOT EXISTS relation_edges(id INTEGER PRIMARY KEY,file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,source_qn TEXT NOT NULL,target_name TEXT NOT NULL,kind TEXT NOT NULL,line INTEGER NOT NULL,inferred INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS references_idx(id INTEGER PRIMARY KEY,source_symbol_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE,target_symbol_id INTEGER REFERENCES symbols(id) ON DELETE SET NULL,file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,line INTEGER NOT NULL,kind TEXT NOT NULL,inferred INTEGER NOT NULL DEFAULT 0);
 CREATE VIRTUAL TABLE IF NOT EXISTS symbol_search USING fts5(symbol_id UNINDEXED,name,qualified_name,signature,path);
-CREATE TABLE IF NOT EXISTS marks(id INTEGER PRIMARY KEY,query_key TEXT NOT NULL,query TEXT NOT NULL,target TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT (datetime('now')),UNIQUE(query_key,target));
-CREATE TABLE IF NOT EXISTS facts(id INTEGER PRIMARY KEY,provider TEXT NOT NULL,target TEXT NOT NULL,fact_kind TEXT NOT NULL,payload TEXT NOT NULL,confidence TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT (datetime('now')),UNIQUE(provider,target,fact_kind));
+CREATE TABLE IF NOT EXISTS marks(id INTEGER PRIMARY KEY,query_key TEXT NOT NULL,query TEXT NOT NULL,target TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),UNIQUE(query_key,target));
+CREATE TABLE IF NOT EXISTS facts(id INTEGER PRIMARY KEY,provider TEXT NOT NULL,target TEXT NOT NULL,fact_kind TEXT NOT NULL,payload TEXT NOT NULL,confidence TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),UNIQUE(provider,target,fact_kind));
 CREATE INDEX IF NOT EXISTS facts_target ON facts(target);
 CREATE TABLE IF NOT EXISTS anchors(id INTEGER PRIMARY KEY,file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,parent_symbol TEXT NOT NULL,kind TEXT NOT NULL,name TEXT NOT NULL,start_line INTEGER NOT NULL,end_line INTEGER NOT NULL,depth INTEGER NOT NULL,label TEXT,condition_ids TEXT,calls TEXT,declared TEXT,literals TEXT);
 CREATE INDEX IF NOT EXISTS anchors_file ON anchors(file_id);
 CREATE TABLE IF NOT EXISTS literal_occurrences(id INTEGER PRIMARY KEY,file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,value TEXT NOT NULL,normalized TEXT NOT NULL,kind TEXT NOT NULL,usage_kind TEXT NOT NULL,line INTEGER NOT NULL,parent_symbol TEXT NOT NULL,anchor_id INTEGER);
 CREATE INDEX IF NOT EXISTS literals_value ON literal_occurrences(value);
-CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,query_key TEXT NOT NULL,phrase TEXT NOT NULL,body TEXT NOT NULL,target TEXT,target_hash TEXT,commit_sha TEXT,created_at TEXT NOT NULL DEFAULT (datetime('now')),UNIQUE(query_key,kind,body));
+CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,query_key TEXT NOT NULL,phrase TEXT NOT NULL,body TEXT NOT NULL,target TEXT,target_hash TEXT,commit_sha TEXT,created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),UNIQUE(query_key,kind,body));
 CREATE INDEX IF NOT EXISTS notes_target ON notes(target);
-CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,top_score REAL,results INTEGER NOT NULL,useful INTEGER NOT NULL,llm_used INTEGER NOT NULL DEFAULT 0,llm_rescued INTEGER NOT NULL DEFAULT 0,command TEXT NOT NULL DEFAULT 'search',created_at TEXT NOT NULL DEFAULT (datetime('now')));").map_err(|e|e.to_string())?;
+CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,top_score REAL,results INTEGER NOT NULL,useful INTEGER NOT NULL,llm_used INTEGER NOT NULL DEFAULT 0,llm_rescued INTEGER NOT NULL DEFAULT 0,command TEXT NOT NULL DEFAULT 'search',created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')));").map_err(|e|e.to_string())?;
         // Existing logs predate per-command telemetry; give them the column.
         let _ = db.execute("ALTER TABLE query_log ADD COLUMN command TEXT NOT NULL DEFAULT 'search'", []);
         // Forward-compatible migration for indexes created before local marking.
@@ -365,7 +373,7 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
     }
     /// Notes whose wording overlaps the query — the same lexical rule as marks.
     pub fn notes_for_query(&self,tokens:&[String])->std::result::Result<Vec<Note>,String>{
-        let mut st=self.db.prepare("SELECT kind,query_key,phrase,body,target,target_hash,commit_sha,created_at FROM notes").map_err(|e|e.to_string())?;
+        let mut st=self.db.prepare("SELECT kind,query_key,phrase,body,target,target_hash,commit_sha,datetime(created_at,'localtime') FROM notes").map_err(|e|e.to_string())?;
         let rows:Vec<(String,String,String,String,Option<String>,Option<String>,Option<String>,String)>=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).map_err(|e|e.to_string())?.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())?;
         let mut out=Vec::new(); let mut seen=HashSet::new();
         for (kind,key,phrase,body,target,hash,commit,at) in rows {
@@ -377,7 +385,7 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
     }
     /// Notes anchored to a symbol, for inline surfacing next to its search hit.
     pub fn notes_for_symbol(&self,qn:&str)->std::result::Result<Vec<Note>,String>{
-        let mut st=self.db.prepare("SELECT kind,phrase,body,target,target_hash,commit_sha,created_at FROM notes WHERE target=?1 OR target LIKE ?1||':%' GROUP BY body ORDER BY created_at DESC LIMIT 3").map_err(|e|e.to_string())?;
+        let mut st=self.db.prepare("SELECT kind,phrase,body,target,target_hash,commit_sha,datetime(created_at,'localtime') FROM notes WHERE target=?1 OR target LIKE ?1||':%' GROUP BY body ORDER BY created_at DESC LIMIT 3").map_err(|e|e.to_string())?;
         let rows:Vec<(String,String,String,Option<String>,Option<String>,Option<String>,String)>=st.query_map(params![qn],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).map_err(|e|e.to_string())?.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())?;
         Ok(rows.into_iter().map(|(k,p,b,t,h,c,a)|self.row_to_note(k,p,b,t,h,c,a)).collect())
     }
@@ -393,8 +401,8 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
         Ok(removed)
     }
     pub fn list_notes(&self,kind:Option<&str>,limit:usize)->std::result::Result<Vec<Note>,String>{
-        let sql=match kind { Some(_)=>"SELECT kind,phrase,body,target,target_hash,commit_sha,created_at FROM notes WHERE kind=?2 GROUP BY body ORDER BY id DESC LIMIT ?1",
-                             None=>"SELECT kind,phrase,body,target,target_hash,commit_sha,created_at FROM notes GROUP BY body ORDER BY id DESC LIMIT ?1" };
+        let sql=match kind { Some(_)=>"SELECT kind,phrase,body,target,target_hash,commit_sha,datetime(created_at,'localtime') FROM notes WHERE kind=?2 GROUP BY body ORDER BY id DESC LIMIT ?1",
+                             None=>"SELECT kind,phrase,body,target,target_hash,commit_sha,datetime(created_at,'localtime') FROM notes GROUP BY body ORDER BY id DESC LIMIT ?1" };
         let mut st=self.db.prepare(sql).map_err(|e|e.to_string())?;
         let map=|r:&rusqlite::Row<'_>|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,String>(6)?));
         let rows:Vec<_>=match kind { Some(k)=>st.query_map(params![limit as i64,k],map).map_err(|e|e.to_string())?.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())?,
@@ -407,7 +415,7 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
     /// how it was verified, and which symptoms name it. Reports what is MISSING too —
     /// a card with holes is more useful than a card that pretends to be complete.
     pub fn dossier(&self,commit:&str)->std::result::Result<Dossier,String>{
-        let mut st=self.db.prepare("SELECT kind,phrase,body,target,target_hash,commit_sha,created_at FROM notes WHERE coalesce(commit_sha,'')=?1 ORDER BY id").map_err(|e|e.to_string())?;
+        let mut st=self.db.prepare("SELECT kind,phrase,body,target,target_hash,commit_sha,datetime(created_at,'localtime') FROM notes WHERE coalesce(commit_sha,'')=?1 ORDER BY id").map_err(|e|e.to_string())?;
         let notes:Vec<Note>=st.query_map(params![commit],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,String>(6)?)))
             .map_err(|e|e.to_string())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())?
             .into_iter().map(|(k,p,b,t,h,c,a)|self.row_to_note(k,p,b,t,h,c,a)).collect();
@@ -427,8 +435,44 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
         if of("invariant").is_empty() { missing.push("STATE/NUMBERS — no invariant recorded (`--kind invariant`)".into()) }
         if of("pending").is_empty()&&of("rejected").is_empty() { missing.push("REJECTED — nothing recorded as tried-and-wrong (`--kind rejected`)".into()) }
         if of("method").is_empty() { missing.push("VERIFY — no check recorded (`--kind method`)".into()) }
+        if of("playbook").is_empty() { missing.push("PLAYBOOK — no scenario recorded: how a feature or a fix is actually started here (`--kind playbook`)".into()) }
         if symptoms.is_empty() { missing.push("SYMPTOMS — no postmortem or repro (`--kind postmortem`)".into()) }
-        Ok(Dossier{commit:commit.to_string(),anchors,flow,state:of("invariant"),numbers:of("note"),rejected:of("rejected"),verify:of("method"),pending:of("pending"),links:of("link"),symptoms,missing})
+        Ok(Dossier{commit:commit.to_string(),anchors,flow,state:of("invariant"),numbers:of("note"),rejected:of("rejected"),verify:of("method"),playbook:of("playbook"),pending:of("pending"),links:of("link"),symptoms,missing})
+    }
+
+    /// Mine this repo's Claude Code transcripts for shell work done by hand over and
+    /// over. Navigation telemetry says what was *looked for*; this says what was
+    /// *assembled* — the half of the session where no tool existed at all.
+    pub fn tool_candidates(&self,min_times:usize,limit:usize)->std::result::Result<Vec<ToolCandidate>,String>{
+        let home=std::env::var("HOME").map_err(|e|e.to_string())?;
+        let key=format!("-{}",self.root.display().to_string().replace('/',"-").trim_start_matches('-'));
+        let dir=std::path::Path::new(&home).join(".claude/projects").join(&key);
+        let Ok(entries)=fs::read_dir(&dir) else { return Ok(Vec::new()) };
+        let mut seen:std::collections::HashMap<String,(usize,String,String)>=std::collections::HashMap::new();
+        for entry in entries.flatten() {
+            let path=entry.path();
+            if path.extension().and_then(|e|e.to_str())!=Some("jsonl") { continue }
+            let Ok(text)=fs::read_to_string(&path) else { continue };
+            for line in text.lines() {
+                let Ok(rec)=serde_json::from_str::<serde_json::Value>(line) else { continue };
+                let Some(blocks)=rec["message"]["content"].as_array() else { continue };
+                for b in blocks {
+                    if b["type"]!="tool_use" || b["name"]!="Bash" { continue }
+                    let Some(cmd)=b["input"]["command"].as_str() else { continue };
+                    let shape=command_shape(cmd);
+                    if shape.is_empty() { continue }
+                    let stamp=rec["timestamp"].as_str().unwrap_or("").chars().take(16).collect::<String>();
+                    let slot=seen.entry(shape).or_insert((0,cmd.chars().take(150).collect(),stamp.clone()));
+                    slot.0+=1;
+                    if !stamp.is_empty() { slot.2=stamp; }
+                }
+            }
+        }
+        let mut out:Vec<ToolCandidate>=seen.into_iter().filter(|(_,(n,_,_))|*n>=min_times)
+            .map(|(shape,(times,example,last_seen))|ToolCandidate{shape,times,example,last_seen}).collect();
+        out.sort_by(|a,b|b.times.cmp(&a.times).then(a.shape.cmp(&b.shape)));
+        out.truncate(limit);
+        Ok(out)
     }
 
     /// Turn accumulated search failures into permanent marks: for each unresolved
@@ -734,7 +778,7 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
         let failed=count("SELECT count(*) FROM query_log WHERE command='search' AND useful=0")?;
         let llm_used=count("SELECT count(*) FROM query_log WHERE llm_used=1")?;
         let llm_rescued=count("SELECT count(*) FROM query_log WHERE llm_rescued=1")?;
-        let mut st=self.db.prepare("SELECT query,count(*),max(created_at) FROM query_log WHERE useful=0 AND command='search' GROUP BY query ORDER BY max(id) DESC LIMIT ?1").map_err(|e|e.to_string())?;
+        let mut st=self.db.prepare("SELECT query,count(*),max(datetime(created_at,'localtime')) FROM query_log WHERE useful=0 AND command='search' GROUP BY query ORDER BY max(id) DESC LIMIT ?1").map_err(|e|e.to_string())?;
         let rows:rusqlite::Result<Vec<(String,i64,String)>>=st.query_map(params![limit as i64],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?.collect();
         // retry episodes: consecutive failed queries within 90s of each other
         let mut st=self.db.prepare("SELECT query,useful,strftime('%s',created_at) FROM query_log WHERE command='search' ORDER BY id DESC LIMIT 200").map_err(|e|e.to_string())?;
@@ -882,6 +926,34 @@ fn cqn_key(q:&str)->String{ q.rsplit('.').next().unwrap_or(q).to_string() }
 /// How well a query overlaps a stored key. Strict subset matching broke the moment
 /// a question word was added, so this is proportional: shared tokens over the
 /// smaller side, with connectives ignored.
+/// Reduce a shell command to its shape: the tools and flags, with every literal,
+/// path and number removed. Two invocations that differ only in their arguments
+/// collapse to the same shape — which is exactly when a tool is missing.
+fn command_shape(cmd:&str)->String{
+    let mut out:Vec<String>=Vec::new();
+    for raw in cmd.split(|c|c=='|'||c==';'||c=='\n'||c=='&') {
+        let piece=raw.trim();
+        if piece.is_empty() { continue }
+        let mut words=piece.split_whitespace();
+        let Some(head)=words.next() else { continue };
+        let head=head.rsplit('/').next().unwrap_or(head);
+        // Redirections split into fragments like `1` from `2>&1`; only a real command starts with a letter.
+        if !head.starts_with(|c:char|c.is_ascii_alphabetic()) { continue }
+        if matches!(head,"cd"|"echo"|"true"|"false"|"then"|"fi"|"do"|"done"|"if") { continue }
+        // Everything past `<<` is heredoc body, not shell: keep parsing it and the
+        // same script splits into a different shape every time it edits a new file.
+        if piece.contains("<<") { out.push(format!("{head} <<heredoc")); break }
+        // `tail -3` and `tail -8` are the same shape; the count is an argument.
+        let flags:Vec<String>=words.filter(|w|w.starts_with('-')&&w.len()<=12)
+            .map(|w|{let t=w.trim_end_matches(|c:char|c.is_ascii_digit()); if t.len()==w.len(){w.to_string()}else{format!("{t}N")}})
+            .take(3).collect();
+        let mut token=head.to_string();
+        if !flags.is_empty() { token.push(' '); token.push_str(&flags.join(" ")); }
+        out.push(token);
+        if out.len()>=4 { break }
+    }
+    out.join(" | ")
+}
 fn key_overlap(key:&str,tokens:&[String])->f64{
     let have:HashSet<&str>=key.split(' ').filter(|t|!t.is_empty()).collect();
     let want:HashSet<&str>=tokens.iter().map(String::as_str).filter(|t|!STOPWORDS.contains(t)).collect();
@@ -921,6 +993,18 @@ fn ollama_mark(host:&str, model:&str, qualified_name:&str, kind:&str, signature:
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// The whole value of `candidates` is that repeated work collapses to one row:
+    /// heredoc bodies, redirection fragments and count flags must not split it.
+    #[test]
+    fn command_shape_collapses_arguments_but_keeps_structure() {
+        let heredoc = command_shape("python3 - <<'PY'\ns=open('src/index.rs').read()\nPY");
+        assert_eq!(heredoc, "python3 <<heredoc");
+        assert_eq!(command_shape("python3 - <<'PY'\nold='''x'''\nPY"), heredoc);
+        assert_eq!(command_shape("cargo test --lib 2>&1 | tail -8"), "cargo --lib | tail -N");
+        assert_eq!(command_shape("cargo test --lib 2>&1 | tail -25"), "cargo --lib | tail -N");
+        assert_ne!(command_shape("sed -n '1,20p' a.rs"), command_shape("sed -i '' s/a/b/ a.rs"));
+    }
 
     #[test]
     fn indexes_incrementally_searches_gets_and_finds_call_impact() {
@@ -1024,13 +1108,15 @@ mod tests {
         // an empty dossier must still be useful: it says what is missing
         let empty = index.dossier("deadbee").unwrap();
         assert!(empty.anchors.is_empty());
-        assert_eq!(empty.missing.len(), 5, "every unfilled section is reported: {:?}", empty.missing);
+        assert_eq!(empty.missing.len(), 6, "every unfilled section is reported: {:?}", empty.missing);
 
         // record a change the way a session actually would
         index.add_note("объект проваливается sinks through ground", "ground contact used 8 body corners", "postmortem", Some("body_contact"), &[]).unwrap();
         index.add_note("vel is derived", "pos is pushed out; impulse via lin_mom; vel untouched", "invariant", Some("body_contact"), &[]).unwrap();
         index.add_note("spring clamp", "clamping spring force made the car float — rejected", "rejected", None, &[]).unwrap();
         index.add_note("regression check", "run the physics regression: same two metrics miss as on HEAD", "method", None, &[]).unwrap();
+        // a scenario is reached by the task, not by the symptom — hence the alias
+        index.add_note("новая фича с чего начать", "1) формулы из отчётов 2) место в коде 3) проверка числом", "playbook", None, &["добавить туман".into()]).unwrap();
 
         // notes carry the commit they were written on; the dossier keys on it
         let commit: String = index.db.query_row("SELECT coalesce(commit_sha,'') FROM notes LIMIT 1", [], |r| r.get(0)).unwrap();
@@ -1040,8 +1126,11 @@ mod tests {
         assert_eq!(d.state.len(), 1);
         assert_eq!(d.rejected.len(), 1);
         assert_eq!(d.verify.len(), 1);
-        assert_eq!(d.symptoms.len(), 1);
+        assert_eq!(d.playbook.len(), 1);
+        assert_eq!(d.symptoms.len(), 1, "a playbook is not a symptom — it must not leak into SYMPTOMS");
         assert!(d.missing.is_empty(), "a complete card reports no holes: {:?}", d.missing);
+        // the scenario is found by the task someone is starting, not by its title
+        assert!(index.search("добавить туман").unwrap().iter().any(|r| r.kind == "note:playbook"));
     }
 
     #[test]

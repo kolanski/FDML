@@ -10,6 +10,11 @@ Binary: `fdml` (install into any repo with `fdml skill --install`, or globally w
 
 ## The flow (index first, grep second)
 
+0. **Picking up work that was already under way?** `fdml dossier` first — it is the
+   restore point: invariants, the PR recipe, `PENDING` (finished but not merged) and
+   the symptoms recorded against this change. Falls back to the last recorded card if
+   HEAD has none. Leave one behind when you stop mid-task:
+   `fdml note "на чём остановились <тема>" "<done / left>" --kind pending`.
 1. **Ensure the index exists** (once per repo; a re-run costs ~10ms):
    ```bash
    fdml index <repo-root>
@@ -99,6 +104,7 @@ that symbol's hit as `↳ [invariant] …`.
 | `pending` | knowledge that is **true and measured, but the change was reverted** | say what it is and what it must return with |
 | `repro` | how to make a problem observable — including how to build and run | a person with a clean checkout can follow it |
 | `method` | how to verify a claim — **must carry the expected number** | without a number it is not a check |
+| `playbook` | the scenario for a *kind of work*: where to start a feature, how a bug gets fixed here | the entry query is a task («добавить туман»), not a symptom |
 | `link` | a decision that lives outside the code | roadmap, PR, ADR, ticket |
 
 Split symptom from fact: "the thing gets pushed out of place" is a `postmortem`,
@@ -108,6 +114,20 @@ needs `--at` and a life of its own.
 
 `rejected` and `pending` are opposites, and confusing them is expensive: `rejected`
 means *do not do this*, `pending` means *this is right, put it back together with X*.
+
+A `playbook` is written by hand — nothing assembles it. Two rules keep it alive:
+its steps **point at existing notes by their phrase instead of restating them** (a
+copied step rots separately from the original), and the ways people start that work
+go in `--alias`, not stuffed into the phrase. `--kind method` is not the place for
+it: a scenario answers *what do I do now*, a method answers *is my claim true*.
+
+```bash
+fdml note "новая фича с чего начать" \
+    "1) формулу берём из отчётов реверса, не выдумываем
+     2) место в коде: fdml search «<эффект>»
+     3) проверка числом — см. заметку «как проверить что не сломал физику»" \
+    --kind playbook --alias "добавить туман" --alias "как переносить эффект из игры"
+```
 
 **When to use `--at`:** anchor when the rule matters to whoever opens that code —
 invariants, traps, gotchas — so it appears inline with the symbol. Leave it off when

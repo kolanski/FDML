@@ -327,7 +327,7 @@ pub enum Commands {
         phrase: Option<String>,
         /// The note itself; keep it to 3-5 lines. Omit to search instead of write
         body: Option<String>,
-        /// repro | postmortem | invariant | rejected | method
+        /// repro | postmortem | invariant | rejected | method | playbook | pending | link
         #[arg(long, default_value = "note")]
         kind: String,
         /// Anchor to a symbol or file:line so it surfaces with that hit
@@ -354,6 +354,22 @@ pub enum Commands {
     Dossier {
         /// Commit sha as recorded on the notes (short form, e.g. 58e2781); defaults to HEAD
         commit: Option<String>,
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Shell work this repo's sessions rebuilt by hand repeatedly — candidates for a tool
+    Candidates {
+        /// Report shapes repeated at least this many times
+        #[arg(long, default_value_t = 3)]
+        min: usize,
+        /// How many candidates to show
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
         /// Repository root; defaults to the current directory
         #[arg(long)]
         path: Option<String>,
