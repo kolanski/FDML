@@ -43,9 +43,10 @@ impl CommandRunner {
                 self.run_scan_platform(input, output, format, exclude, llm, skip_scenarios, fast, model, provider, ollama_url, num_ctx, chunk_strategy)
             },
             Commands::Index { path } => self.run_index(path),
-            Commands::Search { query, path, flow, llm, model, ollama_url, json } => self.run_index_search(query, path, flow, llm, model, ollama_url, json),
+            Commands::Search { query, path, limit, long, flow, llm, model, ollama_url, json } => self.run_index_search(query, path, limit, long, flow, llm, model, ollama_url, json),
             Commands::Get { symbol, path, json } => self.run_index_get(symbol, path, json),
             Commands::Note { phrase, body, kind, target, aliases, list, path, json } => self.run_note(phrase, body, kind, target, aliases, list, path, json),
+            Commands::Dossier { commit, path, json } => self.run_dossier(commit, path, json),
             Commands::Heal { apply, limit, min_fails, model, ollama_url, path, json } => self.run_heal(apply, limit, min_fails, model, ollama_url, path, json),
             Commands::Skill { install, global, path } => self.run_skill(install, global, path),
             Commands::Log { path, limit, json } => self.run_index_log(path, limit, json),
@@ -69,12 +70,14 @@ impl CommandRunner {
         Ok(())
     }
 
-    fn run_index_search(&self, query: String, path: Option<String>, flow: bool, llm: bool, model: String, ollama_url: String, json: bool) -> Result<()> {
+    fn run_index_search(&self, query: String, path: Option<String>, limit: usize, long: bool, flow: bool, llm: bool, model: String, ollama_url: String, json: bool) -> Result<()> {
         let root = Self::index_root(path)?;
         let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
         let mut results = index.search(&query).map_err(crate::error::FdmlError::project_error)?;
         // M2: the honest signal. Below the threshold the deterministic layer says so —
         // and only then may the experimental LLM fallback spend its seconds.
+        let total = results.len();
+        results.truncate(limit.max(1));
         let useful = results.first().is_some_and(|r| r.score >= crate::index::USEFUL_SCORE);
         let mut rescued = false;
         if !useful && llm {
@@ -97,13 +100,21 @@ impl CommandRunner {
                 println!("⚠ no useful result{} — fall back to grep{}\n", results.first().map(|r| format!(" (top score {:.2})", r.score)).unwrap_or_default(), if llm { "" } else { ", or retry with --llm" });
             }
             for r in &results {
-                // the location to read comes first: that is what the caller does next
-                println!("{}:{}  read {}-{}{}", r.file, r.start_line, r.window[0], r.window[1], if r.marked { "  [marked]" } else { "" });
-                println!("{}  {}  score: {:.2}", r.qualified_name, r.kind, r.score);
+                if long {
+                    // the location to read comes first: that is what the caller does next
+                    println!("{}:{}  read {}-{}{}", r.file, r.start_line, r.window[0], r.window[1], if r.marked { "  [marked]" } else { "" });
+                    println!("{}  {}  score: {:.2}", r.qualified_name, r.kind, r.score);
+                } else {
+                    // grep shape: one line per hit, `path:line: source`. An agent reaching
+                    // for grep out of habit gets the same silhouette, for fewer bytes.
+                    let line = Self::source_line(&root, &r.file, r.start_line);
+                    println!("{}:{}:{}{}", r.file, r.start_line, line, if r.marked { "  [marked]" } else { "" });
+                }
                 for n in &r.notes { println!("  ↳ [{}] {}{}", n.kind, n.body.lines().next().unwrap_or(""), if n.stale { "  ⚠ stale" } else { "" }); }
-                if r.oversized { println!("⚠ god function: {} lines — retrieve by line anchor (`fdml mark \"<query>\" {}:<line>`), not as one symbol", r.body_lines, r.file); }
-                println!();
+                if r.oversized { println!("  ⚠ god function: {} lines — use `fdml outline {}`", r.body_lines, r.qualified_name); }
+                if long { println!(); }
             }
+            if total > results.len() { println!("({} more — raise with --limit)\n", total - results.len()); }
             for f in &flows { println!("FLOW (entry {}, depth {})\n  {}{}\n", f.entry, f.depth, f.chain.join(" -> "), if f.next.is_empty() { String::new() } else { format!(" -> [{}]", f.next.join(", ")) }); }
         }
         Ok(())
@@ -152,6 +163,49 @@ impl CommandRunner {
         Ok(())
     }
 
+    /// The source line behind a hit, so a result reads like a grep result.
+    fn source_line(root: &std::path::Path, file: &str, line: usize) -> String {
+        if line == 0 { return String::new() }
+        std::fs::read_to_string(root.join(file)).ok()
+            .and_then(|t| t.lines().nth(line - 1).map(|l| format!(" {}", l.trim())))
+            .map(|l| l.chars().take(120).collect())
+            .unwrap_or_default()
+    }
+
+    fn run_dossier(&self, commit: Option<String>, path: Option<String>, json: bool) -> Result<()> {
+        let root = Self::index_root(path)?;
+        let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        let commit = commit.unwrap_or_else(|| {
+            std::process::Command::new("git").args(["-C", &root.display().to_string(), "rev-parse", "--short", "HEAD"]).output().ok()
+                .filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
+        });
+        let d = index.dossier(&commit).map_err(crate::error::FdmlError::project_error)?;
+        if json { println!("{}", serde_json::to_string_pretty(&d).unwrap()); return Ok(()); }
+        let block = |label: &str, notes: &[crate::index::Note]| {
+            for (i, n) in notes.iter().enumerate() {
+                let head = if i == 0 { label } else { "" };
+                for (j, line) in n.body.lines().enumerate() {
+                    println!("{:<9}{}{}", if j == 0 { head } else { "" }, line, if j == 0 && n.stale { "  ⚠ stale" } else { "" });
+                }
+            }
+        };
+        println!("DOSSIER  {}
+", d.commit);
+        for (i, a) in d.anchors.iter().enumerate() { println!("{:<9}{a}", if i == 0 { "ANCHOR" } else { "" }); }
+        if !d.flow.is_empty() { println!("{:<9}{}", "FLOW", d.flow.join(" → ")); }
+        block("STATE", &d.state);
+        block("NOTE", &d.numbers);
+        block("REJECTED", &d.rejected);
+        block("VERIFY", &d.verify);
+        for (i, s) in d.symptoms.iter().enumerate() { println!("{:<9}«{s}»", if i == 0 { "SYMPTOMS" } else { "" }); }
+        if !d.missing.is_empty() {
+            println!("
+MISSING — the card has holes, which is worth knowing:");
+            for m in &d.missing { println!("  · {m}"); }
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn run_heal(&self, apply: bool, limit: usize, min_fails: usize, model: String, ollama_url: String, path: Option<String>, json: bool) -> Result<()> {
         let root = Self::index_root(path)?;
@@ -170,7 +224,12 @@ impl CommandRunner {
     fn run_skill(&self, install: bool, global: bool, path: Option<String>) -> Result<()> {
         // The canonical skill ships inside the binary, so any repo can activate the
         // index-first navigation loop without hunting for files.
-        const SKILL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/.claude/skills/fdml-nav/SKILL.md"));
+        // Embedded at build time so any repo can be activated; but when the canonical
+        // file is present on disk (developing FDML itself), prefer it — installing a
+        // skill that is one rebuild stale is exactly how the text drifts from the tool.
+        const EMBEDDED: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/.claude/skills/fdml-nav/SKILL.md"));
+        let canonical = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".claude/skills/fdml-nav/SKILL.md");
+        let skill = std::fs::read_to_string(&canonical).unwrap_or_else(|_| EMBEDDED.to_string());
         let home = std::env::var("HOME").unwrap_or_default();
         let user_path = std::path::Path::new(&home).join(".claude/skills/fdml-nav/SKILL.md");
         let project_root = Self::index_root(path)?;
@@ -178,7 +237,7 @@ impl CommandRunner {
         if install {
             let target = if global { &user_path } else { &project_path };
             if let Some(dir) = target.parent() { std::fs::create_dir_all(dir).map_err(|e| crate::error::FdmlError::project_error(format!("cannot create {}: {e}", dir.display())))?; }
-            std::fs::write(target, SKILL).map_err(|e| crate::error::FdmlError::project_error(format!("cannot write {}: {e}", target.display())))?;
+            std::fs::write(target, &skill).map_err(|e| crate::error::FdmlError::project_error(format!("cannot write {}: {e}", target.display())))?;
             println!("Installed fdml-nav skill -> {}", target.display());
             println!("New Claude Code sessions in {} will search the index before grepping.", if global { "any repository" } else { "this repository" });
             return Ok(());
