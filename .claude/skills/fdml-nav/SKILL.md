@@ -40,6 +40,13 @@ Binary: `fdml` (install into any repo with `fdml skill --install`, or globally w
    `no useful result — fall back to grep` (JSON: empty, or top `score < 0.55`),
    grep as you normally would. Optionally retry once with `--llm`. Failures are
    auto-logged; never report them anywhere, telemetry is passive.
+4. **The question this tool does not answer — go straight to grep.** Ranked top-N
+   cannot express *absence*: "every place that filters by category, to find the one
+   that omits `STATUS_CANCELLED`" needs the complete set, and the index will hand you a
+   confident, well-scored, incomplete one. This is worse than an honest miss — the
+   answer looks finished. Any query of the form *all sites / everywhere / the one
+   that is missing* is grep's, not the index's, and afterwards there is nothing to
+   `mark`: an exhaustive set has no single address.
 
 ## Reading a result — use Read, never sed/awk
 

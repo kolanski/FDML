@@ -47,7 +47,9 @@ impl CommandRunner {
             Commands::Get { symbol, path, json } => self.run_index_get(symbol, path, json),
             Commands::Note { phrase, body, kind, target, aliases, list, delete, path, json } => self.run_note(phrase, body, kind, target, aliases, list, delete, path, json),
             Commands::Dossier { commit, path, json } => self.run_dossier(commit, path, json),
-            Commands::Candidates { min, limit, path, json } => self.run_candidates(min, limit, path, json),
+            Commands::Report { out, path } => self.run_report(out, path),
+            Commands::History { limit, path, json } => self.run_history(limit, path, json),
+            Commands::Candidates { min, since, limit, path, json } => self.run_candidates(min, since, limit, path, json),
             Commands::Heal { apply, limit, min_fails, model, ollama_url, path, json } => self.run_heal(apply, limit, min_fails, model, ollama_url, path, json),
             Commands::Skill { install, global, path } => self.run_skill(install, global, path),
             Commands::Log { path, limit, json } => self.run_index_log(path, limit, json),
@@ -198,10 +200,87 @@ impl CommandRunner {
             .unwrap_or_default()
     }
 
-    fn run_candidates(&self, min: usize, limit: usize, path: Option<String>, json: bool) -> Result<()> {
+    /// One page over the two layers. Nothing is computed here that a command does not
+    /// already answer — the page is a join of existing JSON, not a third source of truth.
+    fn run_report(&self, out: String, path: Option<String>) -> Result<()> {
         let root = Self::index_root(path)?;
         let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
-        let found = index.tool_candidates(min, limit).map_err(crate::error::FdmlError::project_error)?;
+        let status = index.status().map_err(crate::error::FdmlError::project_error)?;
+        let (total, failed, llm_used, llm_rescued, fails, episodes) = index.query_report(40).map_err(crate::error::FdmlError::project_error)?;
+        let data = serde_json::json!({
+            "status": status,
+            "log": {"queries": total, "failed": failed, "llm_used": llm_used, "llm_rescued": llm_rescued,
+                    "cases": fails.iter().map(|(q, n, at)| serde_json::json!({"query": q, "times": n, "last": at})).collect::<Vec<_>>(),
+                    "retry_episodes": episodes},
+            "history": Self::history_rows(&index, &root, 200),
+            "tree": index.file_tree().unwrap_or_default(),
+            "candidates": index.tool_candidates(3, 12, None).unwrap_or_default(),
+            "notes": index.list_notes(None, 999).unwrap_or_default(),
+            "marks": index.list_marks().unwrap_or_default(),
+            "symbols": index.symbols_dump().unwrap_or_default(),
+        });
+        const TEMPLATE: &str = include_str!("report.html");
+        let page = TEMPLATE.replace("{{DATA}}", &serde_json::to_string(&data).unwrap().replace("</", "<\\/"));
+        let target = std::path::Path::new(&out);
+        std::fs::write(target, page).map_err(|e| crate::error::FdmlError::project_error(format!("cannot write {}: {e}", target.display())))?;
+        let _ = index.log_command("report", "", None, 1, true, false, false);
+        println!("{} — index layer and log layer on one page", target.display());
+        Ok(())
+    }
+
+    /// Commits joined to the sessions that produced them, shared by `history` and `report`.
+    fn history_rows(index: &crate::index::RepositoryIndex, root: &std::path::Path, limit: usize) -> Vec<serde_json::Value> {
+        let spans = index.sessions().unwrap_or_default();
+        // --name-only rides along: the files a commit touched are what lights the map up
+        let Ok(out) = std::process::Command::new("git")
+            .args(["-C", &root.display().to_string(), "log", &format!("-{limit}"), "--name-only", "--format=%x1e%h%x1f%s%x1f%at%x1f%p%x1f"]).output() else { return Vec::new() };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut rows = Vec::new();
+        for entry in text.split('\x1e') {
+            let f: Vec<&str> = entry.split('\x1f').collect();
+            if f.len() < 5 || f[0].is_empty() { continue }
+            let (sha, subject) = (f[0], f[1]);
+            let (scope, title) = subject.split_once(": ").unwrap_or(("", subject));
+            let at: i64 = f[2].trim().parse().unwrap_or(0);
+            let span = spans.iter().find(|s| at >= s.start && at <= s.end);
+            let files: Vec<&str> = f[4].lines().filter(|l| !l.trim().is_empty()).collect();
+            rows.push(serde_json::json!({"commit": sha, "kind": Self::work_kind(scope), "scope": scope, "title": title, "at": at,
+                "parents": f[3].split_whitespace().count(), "files": files,
+                "ask": span.map(|s| s.first_ask.clone()), "prompts": span.map(|s| s.prompts),
+                "notes": index.note_count(sha).unwrap_or(0)}));
+        }
+        rows
+    }
+
+    /// Three kinds of work, because three is what a colour scale can carry honestly:
+    /// everything past the third slot fails the all-pairs floors, so it folds to "other".
+    fn work_kind(scope: &str) -> &'static str {
+        let s = scope.split('(').next().unwrap_or("").trim();
+        match s { "feat" => "feat", "fix" => "fix", "refactor" | "perf" => "refactor", _ => "other" }
+    }
+
+    fn run_history(&self, limit: usize, path: Option<String>, json: bool) -> Result<()> {
+        let root = Self::index_root(path)?;
+        let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        let rows = Self::history_rows(&index, &root, limit);
+        let _ = index.log_command("history", "", None, rows.len(), !rows.is_empty(), false, false);
+        if json { println!("{}", serde_json::to_string_pretty(&rows).unwrap()); return Ok(()); }
+        for r in &rows {
+            println!("{}  {:<18}{}", r["commit"].as_str().unwrap_or(""), r["scope"].as_str().filter(|s| !s.is_empty()).unwrap_or("—"), r["title"].as_str().unwrap_or(""));
+            match r["ask"].as_str() {
+                // the ask is evidence, not a label: the kind of work is already in the commit type
+                Some(ask) => println!("         «{ask}»  · {} prompts · {} notes", r["prompts"], r["notes"]),
+                None => println!("         no session linked · {} notes", r["notes"]),
+            }
+        }
+        Ok(())
+    }
+
+    fn run_candidates(&self, min: usize, since: Option<String>, limit: usize, path: Option<String>, json: bool) -> Result<()> {
+        let root = Self::index_root(path)?;
+        let index = crate::index::RepositoryIndex::open(&root).map_err(crate::error::FdmlError::project_error)?;
+        let found = index.tool_candidates(min, limit, since.as_deref()).map_err(crate::error::FdmlError::project_error)?;
+        if let Some(s) = &since { println!("since {s} (UTC)"); }
         let _ = index.log_command("candidates", "", None, found.len(), !found.is_empty(), false, false);
         if json { println!("{}", serde_json::to_string_pretty(&found).unwrap()); return Ok(()); }
         if found.is_empty() { println!("nothing repeated {min}+ times in this repo's transcripts — no tool is missing yet"); return Ok(()); }
@@ -463,9 +542,26 @@ MISSING — the card has holes, which is worth knowing:");
             print_info("Parsing completed successfully");
         }
         
-        // Validate the document
+        // Document validation: this file on its own
         let validator = Validator::new();
-        let validation_errors = validator.validate(&document)?;
+        let mut validation_errors = validator.validate(&document)?;
+
+        // Project validation: links resolve against the document set (vision + generated),
+        // and an id may exist in only one document. A reference the file alone cannot
+        // place but the project can is not a warning — that is what the set is for.
+        let set = crate::project::document_set::DocumentSet::around(std::path::Path::new(&file))?;
+        if set.docs.len() > 1 {
+            let project_ids = set.all_ids();
+            validation_errors.retain(|e| !e.starts_with("Traceability references unknown")
+                || !project_ids.iter().any(|id| e.ends_with(&format!("'{id}'"))));
+            validation_errors.extend(set.collisions());
+            if self.verbose {
+                print_info(&format!("project set: {} documents", set.docs.len()));
+            }
+        } else {
+            // alone, a vision file pointing at generated ids gets the hint, not a shrug
+            validation_errors.extend(set.unresolved().into_iter().filter(|m| m.contains("no generated spec")));
+        }
         
         // Output results
         match output.as_str() {
@@ -714,12 +810,39 @@ MISSING — the card has holes, which is worth knowing:");
                     print_info(&format!("Validating traceability in: {}", path));
                 }
                 
-                // TODO: Implement traceability validation
-                print_warning("Traceability validation is not yet implemented");
-                print_info("This feature will validate:");
-                println!("  - All traceability links exist");
-                println!("  - No circular dependencies");
-                println!("  - All required relationships are present");
+                let content = fs::read_to_string(&path)
+                    .map_err(|e| crate::error::FdmlError::project_error(format!("cannot read {path}: {e}")))?;
+                let document = parse_fdml_yaml(&content)?;
+                // links resolve against the project's document set (vision + generated),
+                // not the one file: `realizes` crosses that boundary by design
+                let set = crate::project::document_set::DocumentSet::around(std::path::Path::new(&path))?;
+                if set.docs.len() > 1 {
+                    println!("project set: {}", set.docs.iter().map(|(p, _)| p.strip_prefix(&set.root).unwrap_or(p).display().to_string()).collect::<Vec<_>>().join(" + "));
+                }
+                let ids = set.all_ids();
+                let mut errors = set.collisions();
+                errors.extend(set.unresolved());
+                // every link, resolved or not — a link the model cannot place is the finding
+                for t in &document.traceability {
+                    let ok = ids.contains(&t.from) && ids.contains(&t.to) && t.from != t.to;
+                    println!("{} {} --{}--> {}", if ok { "✓" } else { "✗" }, t.from, t.relation, t.to);
+                }
+                let verified: Vec<&str> = document.features.iter().flat_map(|f| f.scenarios.iter())
+                    .filter(|s| document.traceability.iter().any(|t| t.to == s.id && t.relation == "verifies"))
+                    .map(|s| s.id.as_str()).collect();
+                let total: usize = document.features.iter().map(|f| f.scenarios.len()).sum();
+                println!("\nscenarios with a verifying test: {}/{}", verified.len(), total);
+                for f in &document.features {
+                    for s in &f.scenarios {
+                        if !verified.contains(&s.id.as_str()) { println!("  ? {} — no test claims to verify it", s.id); }
+                    }
+                }
+                if errors.is_empty() {
+                    print_success(&format!("{} traceability links resolve", document.traceability.len()));
+                } else {
+                    for e in &errors { print_warning(e); }
+                    return Err(crate::error::FdmlError::project_error(format!("{} traceability problems", errors.len())));
+                }
             },
             TraceCommands::Graph { path, format, output } => {
                 if self.verbose {

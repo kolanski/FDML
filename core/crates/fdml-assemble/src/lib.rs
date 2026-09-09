@@ -205,7 +205,8 @@ pub fn run(report: &LinkReport, scan: &ScanResult, flows: &[Flow], system_name: 
             yaml.push_str(&format!("    description: \"Reconstructed flow through {} steps\"\n", flow.steps.len()));
             yaml.push_str("    steps:\n");
             for (i, step) in flow.steps.iter().enumerate() {
-                yaml.push_str(&format!("      - id: step_{}\n", i));
+                // a step id is unique to its flow; bare `step_0` collided across every flow
+                yaml.push_str(&format!("      - id: {}:step_{}\n", flow.id, i));
                 yaml.push_str(&format!("        action: {}\n", step.action_id));
                 yaml.push_str(&format!("        description: \"{}\"\n", step.description));
             }
@@ -220,8 +221,10 @@ pub fn run(report: &LinkReport, scan: &ScanResult, flows: &[Flow], system_name: 
         for action_id in &feat.actions {
             if business_actions.iter().any(|a| &a.action_id == action_id) {
                 if !has_trace { trace.push_str("traceability:\n"); has_trace = true; }
-                trace.push_str(&format!("  - from: \"feature:{}\"\n", feat.feature_id));
-                trace.push_str(&format!("    to: \"action:{}\"\n", action_id));
+                // ids already carry their type (`feature:…`, `action:…`); prefixing again
+                // produced `feature:feature:…`, which no element in the document has
+                trace.push_str(&format!("  - from: \"{}\"\n", feat.feature_id));
+                trace.push_str(&format!("    to: \"{}\"\n", action_id));
                 trace.push_str("    relation: implements\n");
             }
         }
@@ -230,10 +233,12 @@ pub fn run(report: &LinkReport, scan: &ScanResult, flows: &[Flow], system_name: 
         for param in &action.input {
             let ptype = param.param_type.as_deref().unwrap_or("");
             let normalized = normalize_name(ptype);
-            if domain_entities.iter().any(|e| e.entity_id == normalized) {
+            // a parameter names a type, not a location: match on the entity's name and
+            // link to whatever id that entity actually has
+            if let Some(e) = domain_entities.iter().find(|e| normalize_name(&e.entity_name) == normalized) {
                 if !has_trace { trace.push_str("traceability:\n"); has_trace = true; }
-                trace.push_str(&format!("  - from: \"action:{}\"\n", action.action_id));
-                trace.push_str(&format!("    to: \"entity:{}\"\n", normalized));
+                trace.push_str(&format!("  - from: \"{}\"\n", action.action_id));
+                trace.push_str(&format!("    to: \"{}\"\n", e.entity_id));
                 trace.push_str("    relation: depends_on\n");
             }
         }

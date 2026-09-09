@@ -467,7 +467,25 @@ fn resolve_one_import(imp: &ImportInfo, lang: &Language, importer_dir: &str, ctx
         Language::Java => resolve_dotted_fqn(&java_fqn(imp), ".java", &ctx.java_index),
         // C# `using Foo.Bar;` carries the full dotted namespace in `module`.
         Language::CSharp => resolve_dotted_fqn(&imp.module, ".cs", &ctx.cs_index),
+        Language::C => resolve_c_include(&imp.module, imp.is_relative, importer_dir, ctx),
     }
+}
+
+/// `#include "x.h"` is importer-relative first; failing that, and for `<x.h>` which is
+/// usually an `-I` directory we cannot see, any project file whose path ends in the
+/// include path. A system header matches nothing and stays external, as it should.
+fn resolve_c_include(module: &str, is_relative: bool, importer_dir: &str, ctx: &Ctx) -> Vec<String> {
+    if is_relative {
+        let direct = resolve_relative(importer_dir, module);
+        if ctx.file_set.contains(&direct) {
+            return vec![direct];
+        }
+    }
+    let suffix = format!("/{module}");
+    ctx.file_set.iter()
+        .filter(|p| p.as_str() == module || p.ends_with(&suffix))
+        .cloned()
+        .collect()
 }
 
 // ─────────────────────────────────────────────────────── config discovery (disk) ──

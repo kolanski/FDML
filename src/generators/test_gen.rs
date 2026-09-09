@@ -177,21 +177,19 @@ impl TestGenerator {
         
         for scenario in &feature.scenarios {
             test.push_str(&format!("  describe('Scenario: {}', () => {{\n", scenario.title));
-            test.push_str("    it('should pass scenario steps', async () => {\n");
-            
+            // An unfilled scenario must never pass: `expect(true)` turned every
+            // skeleton into a false "verified". `it.todo` reports it as unproven,
+            // which is the only honest state until the steps below are written.
             for given in &scenario.given {
-                test.push_str(&format!("      // Given: {}\n", given));
+                test.push_str(&format!("    // Given: {}\n", given));
             }
             for when in &scenario.when {
-                test.push_str(&format!("      // When: {}\n", when));
+                test.push_str(&format!("    // When: {}\n", when));
             }
             for then in &scenario.then {
-                test.push_str(&format!("      // Then: {}\n", then));
+                test.push_str(&format!("    // Then: {}\n", then));
             }
-            
-            test.push_str("      // TODO: Implement actual test steps\n");
-            test.push_str("      expect(true).toBe(true);\n");
-            test.push_str("    });\n");
+            test.push_str("    it.todo('fill the steps above, then replace it.todo with it');\n");
             test.push_str("  });\n");
         }
         

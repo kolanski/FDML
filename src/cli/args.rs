@@ -362,11 +362,37 @@ pub enum Commands {
         json: bool,
     },
 
+    /// One page showing the index layer and the log layer together
+    Report {
+        /// Where to write the page
+        #[arg(long, default_value = "fdml-report.html")]
+        out: String,
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+    },
+
+    /// What was built and why: commits joined to the prompts they came from
+    History {
+        /// How many commits to show
+        #[arg(long, default_value_t = 12)]
+        limit: usize,
+        /// Repository root; defaults to the current directory
+        #[arg(long)]
+        path: Option<String>,
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Shell work this repo's sessions rebuilt by hand repeatedly — candidates for a tool
     Candidates {
         /// Report shapes repeated at least this many times
         #[arg(long, default_value_t = 3)]
         min: usize,
+        /// Count only commands at or after this ISO date/time (UTC), e.g. 2026-08-29 or 2026-08-29T08:26 — "did the rule work?"
+        #[arg(long)]
+        since: Option<String>,
         /// How many candidates to show
         #[arg(long, default_value_t = 10)]
         limit: usize,

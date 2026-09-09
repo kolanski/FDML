@@ -135,7 +135,8 @@ fn emits_known_entity_and_action_ids() {
     // Entity output wiring: place_order returns Order, which is a domain entity.
     assert!(yaml.contains("      entity: order\n"), "missing action output entity wiring");
     // Traceability: action depends_on entity via its typed param.
-    assert!(yaml.contains("    to: \"entity:order\"\n"), "missing depends_on traceability");
+    // the link carries the entity's own id, whatever form it has; assemble adds no prefix of its own
+    assert!(yaml.contains("    to: \"order\"\n"), "missing depends_on traceability");
 }
 
 #[test]

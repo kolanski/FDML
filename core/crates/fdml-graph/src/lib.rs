@@ -198,8 +198,9 @@ fn link_entities(
         // Build field links
         let fields = build_field_links(element);
 
-        // Generation path: no spec to match against → always a fresh suggestion.
-        let entity_id = normalize_name(&element.name);
+        // Identity is the location, not the name: two `Config` structs in two files
+        // are two entities, and a rename elsewhere must not move this one.
+        let entity_id = format!("entity:{code_ref}");
         entities.push(EntityLink {
             entity_id: entity_id.clone(),
             entity_name: element.name.clone(),
@@ -227,7 +228,10 @@ fn collect_classes<'a>(
     out: &mut Vec<(&'a CodeElement, &'a str, &'a str)>,
 ) {
     for el in elements {
-        if matches!(el.element_type, ElementType::Class | ElementType::Interface) {
+        // `typedef struct { … } name;` is how C spells a record: a type alias that
+        // carries fields is an entity, an alias of a scalar is not
+        let typedef_record = matches!(el.element_type, ElementType::TypeAlias) && !el.children.is_empty();
+        if matches!(el.element_type, ElementType::Class | ElementType::Interface) || typedef_record {
             out.push((el, file_path, module_path));
         }
         // Check nested classes
@@ -349,10 +353,8 @@ fn process_action_candidate(
         None => format!("{}:{}", file_path, el.name),
     };
 
-    let action_id = match class_name {
-        Some(cls) => format!("{}_{}", normalize_name(cls), normalize_name(&el.name)),
-        None => normalize_name(&el.name),
-    };
+    // `action:` + the code ref: `type:path:name`, the merge key CORE-REWORK §3 names.
+    let action_id = format!("action:{code_ref}");
 
     let input: Vec<ActionParam> = el.parameters.iter().map(|p| ActionParam {
         name: p.name.clone(),
@@ -458,7 +460,8 @@ fn suggest_features(
         let title = titlecase_name(last_segment);
 
         features.push(FeatureSuggestion {
-            feature_id: normalize_name(last_segment),
+            // the module path, not its last word: `a/utils` and `b/utils` are two features
+            feature_id: format!("feature:{module}"),
             title,
             module_path: module.clone(),
             confidence: 0.0, // always suggested, LLM decides
@@ -644,7 +647,8 @@ fn split_module_into_semantic_features(
         // Assign entities to this cluster
         let group_entities = assign_entities_to_group(&action_ids, all_entity_ids, entities);
 
-        let feature_id = format!("{}_{}", normalize_name(last_segment), normalize_name(&group_name));
+        // group name is deterministic (sorted candidates, name tie-break), so this is stable
+        let feature_id = format!("feature:{}:{}", module, normalize_name(&group_name));
         let title = titlecase_name(&group_name);
 
         result.push(FeatureSuggestion {
@@ -662,7 +666,7 @@ fn split_module_into_semantic_features(
     if !utility_actions.is_empty() {
         let group_entities = assign_entities_to_group(&utility_actions, all_entity_ids, entities);
         result.push(FeatureSuggestion {
-            feature_id: format!("{}_utility", normalize_name(last_segment)),
+            feature_id: format!("feature:{module}:utility"),
             title: format!("{} Utility", titlecase_name(last_segment)),
             module_path: module.to_string(),
             confidence: 0.0,

@@ -17,6 +17,10 @@ pub struct FdmlDocument {
     pub constraints: Vec<Constraint>,
     #[serde(default)]
     pub traceability: Vec<Traceability>,
+    /// Tests are elements too: a scenario is *verified by* a test, and a link
+    /// to something the model does not know is an error, not a shrug.
+    #[serde(default)]
+    pub tests: Vec<TestRef>,
     #[serde(default)]
     pub generation_rules: Vec<GenerationRule>,
 
@@ -171,6 +175,17 @@ pub struct Traceability {
     pub description: Option<String>,
 }
 
+/// A test the spec can point at. `reference` is whatever the runner calls it
+/// (`index::tests::dossier_gathers…` for cargo, a describe/it path for jest);
+/// FDML does not run it, it only knows it exists and what it is meant to verify.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TestRef {
+    pub id: String,
+    pub reference: String,
+    pub runner: Option<String>,
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GenerationRule {
     pub id: String,
@@ -309,6 +324,7 @@ impl Default for FdmlDocument {
             flows: Vec::new(),
             constraints: Vec::new(),
             traceability: Vec::new(),
+            tests: Vec::new(),
             generation_rules: Vec::new(),
             contours: Vec::new(),
             systems: Vec::new(),

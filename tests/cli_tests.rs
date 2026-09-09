@@ -344,7 +344,10 @@ fn test_trace_validate_ecommerce() {
         .arg(ecommerce_path)
         .assert()
         .success()
-        .stdout(predicate::str::contains("Traceability validation"));
+        // real validation now: every link is resolved, and scenarios nobody claims
+        // to verify are named — that list is the point, not a formality
+        .stdout(predicate::str::contains("traceability links resolve"))
+        .stdout(predicate::str::contains("no test claims to verify it"));
 }
 
 #[test]
@@ -454,7 +457,9 @@ fn test_end_to_end_typescript_workflow() {
     
     let feature_test = fs::read_to_string(output_dir.join("tests/user_registration.feature.test.ts")).unwrap();
     assert!(feature_test.contains("describe('Feature: User Registration'"));
-    assert!(feature_test.contains("it('should pass scenario steps'"));
+    // an unfilled scenario is reported as unproven, never as passed
+    assert!(feature_test.contains("it.todo("), "unfilled scenario must be a todo, not a test");
+    assert!(!feature_test.contains("expect(true)"), "a skeleton must not pass by construction");
 }
 
 #[test]

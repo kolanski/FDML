@@ -16,11 +16,15 @@ pub enum Language {
     JavaScript,
     TypeScript,
     Go,
+    /// C and C headers. C++ is not claimed: the grammar is C, and a `.cpp` file
+    /// would be scanned as something it is not.
+    C,
 }
 
 impl Language {
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext {
+            "c" | "h" => Some(Language::C),
             "py" => Some(Language::Python),
             "java" => Some(Language::Java),
             "cs" => Some(Language::CSharp),
@@ -39,6 +43,7 @@ impl Language {
             Language::JavaScript => "javascript",
             Language::TypeScript => "typescript",
             Language::Go => "go",
+            Language::C => "c",
         }
     }
 }
@@ -55,6 +60,10 @@ pub enum ElementType {
     Enum,
     Field,
     Property,
+    /// C preprocessor macro — file-scope wherever it is written.
+    Macro,
+    /// `typedef` — a name for a type, not a type of its own.
+    TypeAlias,
 }
 
 /// Visibility/scope of a code element

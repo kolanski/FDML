@@ -1,0 +1,235 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FDML — index & log</title>
+<style>
+  :root{
+    --surface:#fcfcfb; --panel:#fff; --ink:#1a1a19; --ink2:#4a4a46; --ink3:#84847c;
+    --line:#e4e4de; --grid:#efefe9; --accent:#2a78d6;
+    --feat:#2a78d6; --fix:#eb6834; --refactor:#1baf7a; --other:#84847c;
+    --good:#0ca30c; --warning:#fab219; --critical:#d03b3b;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --surface:#1a1a19; --panel:#232320; --ink:#f2f2ee; --ink2:#b8b8b0; --ink3:#84847c;
+           --line:#33332e; --grid:#2a2a26; --accent:#3987e5;
+           --feat:#3987e5; --fix:#d95926; --refactor:#199e70; --other:#84847c; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:22px 22px 48px;background:var(--surface);color:var(--ink);
+       font:14px/1.5 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif}
+  .wrap{max-width:1240px;margin:0 auto}
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 18px;margin-bottom:14px}
+  h1{font-size:19px;margin:0;font-weight:650;letter-spacing:-.01em}
+  .stats{color:var(--ink3);font-size:12.5px}
+  .stats b{color:var(--ink2);font-weight:600;font-variant-numeric:tabular-nums}
+
+  .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--ink2);margin:10px 0 6px}
+  .legend b{display:inline-flex;align-items:center;gap:5px;font-weight:400}
+  .legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
+  #brush{display:block;width:100%;height:56px;touch-action:none;cursor:ew-resize}
+  .stage{background:var(--panel);border:1px solid var(--line);border-radius:10px}
+  .hint{font-size:11.5px;color:var(--ink3);padding:0 12px 8px}
+
+  .cols{display:grid;grid-template-columns:minmax(340px,5fr) minmax(360px,4fr);gap:16px;margin-top:14px}
+  @media(max-width:900px){.cols{grid-template-columns:1fr}}
+
+  /* left: the activity feed */
+  #feed{max-height:78vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+  .act{display:grid;grid-template-columns:14px 66px 1fr auto;gap:10px;align-items:baseline;
+       padding:9px 12px;border-bottom:1px solid var(--line);cursor:pointer}
+  .act:last-child{border-bottom:0}
+  .act:hover{background:var(--grid)}
+  .act.sel{background:var(--grid);box-shadow:inset 3px 0 0 var(--accent)}
+  .act i{width:9px;height:9px;border-radius:50%;display:inline-block;position:relative;top:-1px}
+  .act .sha{font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink3)}
+  .act .t{font-size:13px;min-width:0}
+  .act .t small{display:block;color:var(--ink3);font-size:11.5px}
+  .act .m{font-size:11.5px;color:var(--ink3);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+  /* right: the inspector */
+  #side{position:sticky;top:16px;align-self:start;display:flex;flex-direction:column;gap:12px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px 14px}
+  #q{width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:var(--panel);
+     color:var(--ink);font:13.5px inherit;outline:none}
+  #q:focus{border-color:var(--accent)}
+  #hits{margin-top:8px;max-height:34vh;overflow-y:auto}
+  .hit{padding:6px 2px;border-top:1px solid var(--line);font-size:12.5px}
+  .hit:first-child{border-top:0}
+  .hit .where{font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink2);word-break:break-all}
+  .hit .tag{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink3);margin-right:6px}
+  .hit .tag.mark{color:var(--good)}
+  .hit .body{color:var(--ink2);font-size:12px;margin-top:2px;white-space:pre-wrap}
+  .none{color:var(--ink3);font-size:12.5px;padding:8px 2px}
+
+  .kindword{font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+  #dtitle{font-size:14.5px;font-weight:600;margin:2px 0 1px}
+  #dmeta{font-size:11.5px;color:var(--ink3)}
+  .ask{border-left:3px solid var(--line);padding:2px 0 2px 10px;margin:10px 0;color:var(--ink2);font-size:12.5px}
+  h3{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink3);font-weight:600;margin:12px 0 6px}
+  .note{border-top:1px solid var(--line);padding:8px 0;font-size:12.5px}
+  .note:first-of-type{border-top:0}
+  .note .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink3)}
+  .note .p{font-weight:600;font-size:12.5px;margin:1px 0 2px}
+  .note .b{color:var(--ink2);white-space:pre-wrap}
+  .files{font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink2);
+         display:flex;flex-wrap:wrap;gap:4px 10px}
+  .files span{background:var(--grid);border-radius:4px;padding:1px 6px}
+  details{font-size:12.5px}
+  summary{cursor:pointer;color:var(--ink3);font-size:11px;text-transform:uppercase;letter-spacing:.07em;font-weight:600}
+  details table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px}
+  details td{padding:4px 8px 4px 0;border-top:1px solid var(--line);vertical-align:top}
+  details td.num{text-align:right;color:var(--ink3);font-variant-numeric:tabular-nums;white-space:nowrap}
+  code{font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink2);word-break:break-word}
+  text{font:12px ui-sans-serif,system-ui,sans-serif;fill:var(--ink)}
+  text.dim{fill:var(--ink3);font-size:11px}
+</style>
+<div class="wrap">
+  <header id="head"></header>
+  <div class="legend" id="legend"></div>
+  <div class="stage"><svg id="brush"></svg><div class="hint">тяните — окно сузится, лента слева отфильтруется · двойной клик — вся история</div></div>
+  <div class="cols">
+    <div id="feed"></div>
+    <div id="side">
+      <div class="card">
+        <input id="q" type="search" placeholder="спросить индекс: символ, концепт, симптом…" autocomplete="off">
+        <div id="hits"></div>
+      </div>
+      <div class="card" id="detail"></div>
+      <div class="card"><details><summary>сигналы лога</summary><div id="signals"></div></details></div>
+    </div>
+  </div>
+</div>
+<script id="payload" type="application/json">{{DATA}}</script>
+<script>
+const D = JSON.parse(document.getElementById('payload').textContent);
+const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const num = n => (n ?? 0).toLocaleString('en-US').replace(/,/g, ' ');
+const day = t => new Date(t * 1000).toISOString().slice(0, 10);
+const KIND = {feat:['фича','var(--feat)'], fix:['багфикс','var(--fix)'],
+              refactor:['переработка','var(--refactor)'], other:['прочее','var(--other)']};
+
+const hist = (D.history || []).filter(h => h.at).sort((a, b) => b.at - a.at); // newest first
+const t0 = hist.length ? hist[hist.length - 1].at : 0, t1 = hist.length ? hist[0].at : 1;
+let lo = t0, hi = t1, selected = hist.length ? hist[0].commit : null;
+
+const s = D.status || {}, l = D.log || {};
+const rate = l.queries ? Math.round(100 * (l.queries - l.failed) / l.queries) : 0;
+document.title = `FDML — ${(s.root_path || '').split('/').pop() || 'index & log'}`;
+
+document.getElementById('head').innerHTML = `
+  <h1>${esc((s.root_path || '').split('/').pop())}</h1>
+  <span class="stats"><b>${num(s.files)}</b> файлов · <b>${num(s.symbols)}</b> символов ·
+  <b>${num(s.marks)}</b> меток · <b>${num((D.notes || []).length)}</b> заметок ·
+  индекс отвечает в <b>${rate}%</b> случаев</span>`;
+document.getElementById('legend').innerHTML =
+  Object.values(KIND).map(v => `<b><i style="background:${v[1]}"></i>${v[0]}</b>`).join('');
+
+// ── left: the feed ───────────────────────────────────────────────────────────
+function drawFeed() {
+  const rows = hist.filter(h => h.at >= lo && h.at <= hi);
+  document.getElementById('feed').innerHTML = rows.map(c => `
+    <div class="act${c.commit === selected ? ' sel' : ''}" data-sha="${esc(c.commit)}">
+      <i style="background:${KIND[c.kind][1]}"></i>
+      <span class="sha">${esc(c.commit)}</span>
+      <span class="t">${esc(c.title)}${c.ask ? `<small>«${esc(c.ask.slice(0, 60))}»</small>` : ''}</span>
+      <span class="m">${c.notes ? c.notes + '&thinsp;з · ' : ''}${(c.files || []).length}&thinsp;ф · ${day(c.at)}</span>
+    </div>`).join('') || '<div class="none" style="padding:12px">в окне пусто</div>';
+}
+document.getElementById('feed').addEventListener('click', e => {
+  const row = e.target.closest('.act'); if (!row) return;
+  selected = row.dataset.sha; drawFeed(); drawDetail();
+});
+
+// ── right: the dossier of what you clicked ───────────────────────────────────
+function drawDetail() {
+  const c = hist.find(h => h.commit === selected);
+  const box = document.getElementById('detail');
+  if (!c) { box.innerHTML = '<div class="none">выберите активность слева</div>'; return; }
+  const notes = (D.notes || []).filter(n => n.commit_sha === c.commit);
+  box.innerHTML = `
+    <span class="kindword" style="color:${KIND[c.kind][1]}">${KIND[c.kind][0]}</span>
+    <div id="dtitle">${esc(c.title)}</div>
+    <div id="dmeta">${esc(c.commit)} · ${day(c.at)}${c.prompts != null ? ` · сессия: ${num(c.prompts)} промптов` : ' · сессия не связана'}</div>
+    ${c.ask ? `<div class="ask">«${esc(c.ask)}»</div>` : ''}
+    ${notes.length ? `<h3>записано против этого коммита</h3>` + notes.map(n => `
+      <div class="note"><span class="k">${esc(n.kind)}${n.stale ? ' · ⚠ stale' : ''}</span>
+        <div class="p">${esc(n.phrase)}</div>
+        <div class="b">${esc(n.body)}</div></div>`).join('') : ''}
+    ${(c.files || []).length ? `<h3>файлы (${c.files.length})</h3>
+      <div class="files">${c.files.slice(0, 16).map(f => `<span>${esc(f.split('/').slice(-2).join('/'))}</span>`).join('')}
+      ${c.files.length > 16 ? `<span>+${c.files.length - 16}</span>` : ''}</div>` : ''}`;
+}
+
+// ── the search box: the same lexical rule the CLI uses, over embedded data ───
+const STOP = new Set(['как','где','что','почему','зачем','когда','the','a','is','и','в','на','не','с','из','по']);
+const toks = q => q.toLowerCase().split(/[^a-zа-яё0-9_]+/i).filter(t => t.length > 1 && !STOP.has(t));
+const overlap = (qt, text) => { const ht = new Set(toks(text));
+  if (!ht.size || !qt.length) return 0;
+  const shared = qt.filter(t => [...ht].some(h => h.includes(t) || t.includes(h))).length;
+  return shared / Math.min(qt.length, ht.size); };
+
+document.getElementById('q').addEventListener('input', e => {
+  const q = e.target.value.trim(), out = document.getElementById('hits');
+  if (q.length < 2) { out.innerHTML = ''; return; }
+  const qt = toks(q), hits = [];
+  for (const [query, target] of (D.marks || [])) {                  // curated first
+    const sc = overlap(qt, query);
+    if (sc >= 0.5) hits.push({sc: sc + 2, html: `<span class="tag mark">метка</span>
+      <span class="where">${esc(target)}</span><div class="body">«${esc(query)}»</div>`});
+  }
+  for (const n of (D.notes || [])) {
+    const sc = overlap(qt, n.phrase);
+    if (sc >= 0.5) hits.push({sc: sc + 1, html: `<span class="tag">${esc(n.kind)}</span>
+      ${esc(n.phrase)}<div class="body">${esc(n.body.length > 220 ? n.body.slice(0, 220) + '…' : n.body)}</div>`});
+  }
+  const ql = q.toLowerCase();
+  for (const [path, line, qn, kind] of (D.symbols || [])) {
+    const s = qn.toLowerCase();
+    if (qt.every(t => s.includes(t)) || s.includes(ql))
+      hits.push({sc: ql.length / qn.length, html: `<span class="tag">${esc(kind)}</span>
+        <span class="where">${esc(path)}:${line}</span><div class="body">${esc(qn)}</div>`});
+  }
+  hits.sort((a, b) => b.sc - a.sc);
+  out.innerHTML = hits.length
+    ? hits.slice(0, 12).map(h => `<div class="hit">${h.html}</div>`).join('')
+    : '<div class="none">лексический слой молчит — в терминале это `fdml search`, там же --llm</div>';
+});
+
+// ── log signals, folded away until asked ─────────────────────────────────────
+document.getElementById('signals').innerHTML = `
+  ${(l.retry_episodes || []).length ? `<h3>перезапросы</h3>` + l.retry_episodes.map(ep =>
+     `<div class="note">${(Array.isArray(ep) ? ep : [ep]).map(esc).join(' → ')}</div>`).join('') : ''}
+  ${(l.cases || []).length ? `<h3>промахи — кандидаты в метки</h3><table>` + l.cases.slice(0, 10).map(c =>
+     `<tr><td><code>${esc(c.query)}</code></td><td class="num">×${c.times}</td></tr>`).join('') + '</table>' : ''}
+  ${(D.candidates || []).length ? `<h3>собрано руками — не хватает инструмента</h3><table>` + D.candidates.slice(0, 8).map(c =>
+     `<tr><td><code>${esc(c.shape)}</code></td><td class="num">×${c.times}</td></tr>`).join('') + '</table>' : ''}`;
+
+// ── timeline brush ───────────────────────────────────────────────────────────
+const brush = document.getElementById('brush');
+const W = () => brush.clientWidth || 900;
+const xOf = t => 20 + (W() - 40) * (t1 === t0 ? .5 : (t - t0) / (t1 - t0));
+const SVG = 'http://www.w3.org/2000/svg';
+const el = (n, a) => { const e = document.createElementNS(SVG, n); for (const k in a) e.setAttribute(k, a[k]); return e; };
+let drag = null;
+function drawBrush() {
+  const w = W(), h = 56;
+  brush.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  brush.replaceChildren(
+    el('rect', {x: xOf(lo), y: 6, width: Math.max(2, xOf(hi) - xOf(lo)), height: 30, rx: 5, fill: 'var(--grid)', stroke: 'var(--line)'}),
+    el('line', {x1: 20, y1: 21, x2: w - 20, y2: 21, stroke: 'var(--line)'}),
+    ...hist.map(c => el('circle', {cx: xOf(c.at), cy: 21, r: 4, fill: KIND[c.kind][1],
+      opacity: c.at >= lo && c.at <= hi ? 1 : .25, stroke: 'var(--panel)', 'stroke-width': 2})),
+    Object.assign(el('text', {x: 20, y: 50, class: 'dim'}), {textContent: day(t0)}),
+    Object.assign(el('text', {x: w - 20, y: 50, class: 'dim', 'text-anchor': 'end'}), {textContent: day(t1)}));
+}
+const tAt = ev => { const r = brush.getBoundingClientRect();
+  const f = Math.min(1, Math.max(0, ((ev.clientX - r.left) * (W() / r.width) - 20) / (W() - 40)));
+  return t0 + f * (t1 - t0); };
+brush.addEventListener('pointerdown', e => { drag = tAt(e); brush.setPointerCapture(e.pointerId); });
+brush.addEventListener('pointermove', e => { if (drag === null) return;
+  const t = tAt(e); lo = Math.min(drag, t); hi = Math.max(drag, t); drawBrush(); drawFeed(); });
+brush.addEventListener('pointerup', () => { drag = null; if (hi - lo < 60) { lo = t0; hi = t1; drawBrush(); drawFeed(); } });
+brush.addEventListener('dblclick', () => { lo = t0; hi = t1; drawBrush(); drawFeed(); });
+
+drawBrush(); drawFeed(); drawDetail();
+addEventListener('resize', drawBrush);
+</script>

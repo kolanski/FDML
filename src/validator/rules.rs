@@ -163,6 +163,11 @@ fn validate_unique_ids(document: &FdmlDocument) -> Result<Vec<String>> {
     let mut all_ids = std::collections::HashSet::new();
     
     // Collect all IDs and check for duplicates
+    for test in &document.tests {
+        if !all_ids.insert(test.id.clone()) {
+            errors.push(format!("Duplicate ID found: '{}'", test.id));
+        }
+    }
     for entity in &document.entities {
         if !entity.id.is_empty() {
             if !all_ids.insert(entity.id.clone()) {
@@ -214,11 +219,10 @@ fn validate_unique_ids(document: &FdmlDocument) -> Result<Vec<String>> {
     Ok(errors)
 }
 
-fn validate_references(document: &FdmlDocument) -> Result<Vec<String>> {
-    let mut errors = Vec::new();
+/// Every id a link may point at. Scenarios and tests are in here on purpose:
+/// evidence is bound at scenario level, and a test is a first-class target.
+pub fn collect_ids(document: &FdmlDocument) -> std::collections::HashSet<String> {
     let mut all_ids = std::collections::HashSet::new();
-    
-    // Collect all valid IDs
     for entity in &document.entities {
         all_ids.insert(entity.id.clone());
     }
@@ -237,6 +241,42 @@ fn validate_references(document: &FdmlDocument) -> Result<Vec<String>> {
     for constraint in &document.constraints {
         all_ids.insert(constraint.id.clone());
     }
+    for test in &document.tests {
+        all_ids.insert(test.id.clone());
+    }
+    all_ids
+}
+
+/// Traceability alone, so `fdml trace validate` and `fdml validate` cannot drift apart.
+/// The relation vocabulary is deliberately open: §9.2 lists examples, and the shipped
+/// example already uses `operates_on` and `creates`. What is checked is that both ends
+/// exist — a link to an element the model does not know is an error, not a hint.
+pub fn check_traceability(document: &FdmlDocument) -> Vec<String> {
+    check_traceability_in(document, &collect_ids(document))
+}
+
+/// The same check against an id space that may be wider than the document: the
+/// project's document set (vision + generated). The relation does not change when a
+/// link crosses a file; only the set it resolves against does.
+pub fn check_traceability_in(document: &FdmlDocument, all_ids: &std::collections::HashSet<String>) -> Vec<String> {
+    let mut errors = Vec::new();
+    for trace in &document.traceability {
+        if !all_ids.contains(&trace.from) {
+            errors.push(format!("Traceability references unknown 'from' element: '{}'", trace.from));
+        }
+        if !all_ids.contains(&trace.to) {
+            errors.push(format!("Traceability references unknown 'to' element: '{}'", trace.to));
+        }
+        if trace.from == trace.to {
+            errors.push(format!("Traceability links '{}' to itself", trace.from));
+        }
+    }
+    errors
+}
+
+fn validate_references(document: &FdmlDocument) -> Result<Vec<String>> {
+    let mut errors = Vec::new();
+    let all_ids = collect_ids(document);
     
     // Check references in features
     for feature in &document.features {
@@ -252,22 +292,9 @@ fn validate_references(document: &FdmlDocument) -> Result<Vec<String>> {
         }
     }
     
-    // Check traceability references
-    for trace in &document.traceability {
-        if !all_ids.contains(&trace.from) {
-            errors.push(format!(
-                "Traceability references unknown 'from' element: '{}'",
-                trace.from
-            ));
-        }
-        if !all_ids.contains(&trace.to) {
-            errors.push(format!(
-                "Traceability references unknown 'to' element: '{}'",
-                trace.to
-            ));
-        }
-    }
-    
+    // Traceability has its own checker, shared with `fdml trace validate`
+    errors.extend(check_traceability(document));
+
     Ok(errors)
 }
 
@@ -444,6 +471,40 @@ mod tests {
     use super::*;
     use crate::parser::ast::*;
     
+    /// The seam between a claim and its evidence: a declared test may verify a
+    /// scenario; an undeclared one, or a misspelt relation, is an error and not a hint.
+    #[test]
+    fn a_test_is_a_traceability_target_and_typos_are_errors() {
+        let yaml = r#"
+features:
+  - id: dossier
+    title: "Dossier"
+    description: "card"
+    scenarios:
+      - id: gathers
+        title: "gathers"
+        given: ["notes exist"]
+        when: ["dossier runs"]
+        then: ["card is full"]
+tests:
+  - id: t_card
+    reference: "index::tests::dossier_gathers_a_commit_and_names_its_holes"
+    runner: "cargo"
+traceability:
+  - from: "t_card"
+    to: "gathers"
+    relation: "verifies"
+"#;
+        let doc = crate::parser::parse_fdml_yaml(yaml).unwrap();
+        assert!(check_traceability(&doc).is_empty(), "a declared test verifying a scenario resolves");
+
+        let doc = crate::parser::parse_fdml_yaml(&yaml.replace("t_card\"\n    to", "t_ghost\"\n    to")).unwrap();
+        assert_eq!(check_traceability(&doc).len(), 1, "an undeclared test is an unknown element");
+
+        let doc = crate::parser::parse_fdml_yaml(&yaml.replace("to: \"gathers\"", "to: \"t_card\"")).unwrap();
+        assert!(check_traceability(&doc)[0].contains("to itself"), "a link from an element to itself proves nothing");
+    }
+
     #[test]
     fn test_validator_empty_document() {
         let document = FdmlDocument::default();

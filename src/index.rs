@@ -71,6 +71,11 @@ impl Dossier {
 /// signal: the second time you assemble the same script, a tool should have
 /// existed. Deterministic — clustering by shape, no model.
 #[derive(Debug, Serialize)] pub struct ToolCandidate { pub shape: String, pub times: usize, pub example: String, pub last_seen: String }
+/// What a session left behind. The join key is **time**, not an id: the session id in
+/// the commit trailer is account-level and identical across every commit, so it cannot
+/// discriminate. A commit falls inside exactly one transcript's span. No classifier
+/// either — the *kind* of work is already in the conventional-commit type.
+#[derive(Debug, Serialize)] pub struct SessionSpan { pub start: i64, pub end: i64, pub prompts: usize, pub first_ask: String }
 #[derive(Debug, Serialize)] pub struct HealProposal { pub query: String, pub target: String, pub reason: String, pub applied: bool }
 #[derive(Debug, Serialize)] pub struct SymbolFact { pub provider: String, pub target: String, pub fact_kind: String, pub payload: serde_json::Value, pub confidence: String }
 #[derive(Debug, Serialize)] pub struct ImpactGraph { pub symbol: String, pub callers: Vec<String>, pub callees: Vec<String>, pub imports: Vec<String>, pub implementations: Vec<String>, pub tests: Vec<String> }
@@ -443,12 +448,16 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
     /// Mine this repo's Claude Code transcripts for shell work done by hand over and
     /// over. Navigation telemetry says what was *looked for*; this says what was
     /// *assembled* — the half of the session where no tool existed at all.
-    pub fn tool_candidates(&self,min_times:usize,limit:usize)->std::result::Result<Vec<ToolCandidate>,String>{
+    /// `since` answers a different question than the total: not "how often was this
+    /// ever built by hand" but "did it stop after the rule was written". It is an
+    /// ISO prefix (`2026-08-29` or `2026-08-29T08:26`) compared against the
+    /// transcript's UTC timestamps.
+    pub fn tool_candidates(&self,min_times:usize,limit:usize,since:Option<&str>)->std::result::Result<Vec<ToolCandidate>,String>{
         let home=std::env::var("HOME").map_err(|e|e.to_string())?;
         let key=format!("-{}",self.root.display().to_string().replace('/',"-").trim_start_matches('-'));
         let dir=std::path::Path::new(&home).join(".claude/projects").join(&key);
         let Ok(entries)=fs::read_dir(&dir) else { return Ok(Vec::new()) };
-        let mut seen:std::collections::HashMap<String,(usize,String,String)>=std::collections::HashMap::new();
+        let mut calls:Vec<(String,String)>=Vec::new();
         for entry in entries.flatten() {
             let path=entry.path();
             if path.extension().and_then(|e|e.to_str())!=Some("jsonl") { continue }
@@ -456,23 +465,71 @@ CREATE TABLE IF NOT EXISTS query_log(id INTEGER PRIMARY KEY,query TEXT NOT NULL,
             for line in text.lines() {
                 let Ok(rec)=serde_json::from_str::<serde_json::Value>(line) else { continue };
                 let Some(blocks)=rec["message"]["content"].as_array() else { continue };
+                let stamp=rec["timestamp"].as_str().unwrap_or("").chars().take(16).collect::<String>();
                 for b in blocks {
                     if b["type"]!="tool_use" || b["name"]!="Bash" { continue }
-                    let Some(cmd)=b["input"]["command"].as_str() else { continue };
-                    let shape=command_shape(cmd);
-                    if shape.is_empty() { continue }
-                    let stamp=rec["timestamp"].as_str().unwrap_or("").chars().take(16).collect::<String>();
-                    let slot=seen.entry(shape).or_insert((0,cmd.chars().take(150).collect(),stamp.clone()));
-                    slot.0+=1;
-                    if !stamp.is_empty() { slot.2=stamp; }
+                    if let Some(cmd)=b["input"]["command"].as_str() { calls.push((cmd.to_string(),stamp.clone())); }
                 }
             }
         }
-        let mut out:Vec<ToolCandidate>=seen.into_iter().filter(|(_,(n,_,_))|*n>=min_times)
-            .map(|(shape,(times,example,last_seen))|ToolCandidate{shape,times,example,last_seen}).collect();
-        out.sort_by(|a,b|b.times.cmp(&a.times).then(a.shape.cmp(&b.shape)));
-        out.truncate(limit);
+        Ok(cluster_shapes(calls,min_times,limit,since))
+    }
+
+    /// The prompts a commit came from. Nothing new is logged for this: git holds the
+    /// what, the transcript holds the ask, and `bridgeSessionId` is the seam.
+    pub fn sessions(&self)->std::result::Result<Vec<SessionSpan>,String>{
+        let home=std::env::var("HOME").map_err(|e|e.to_string())?;
+        let key=format!("-{}",self.root.display().to_string().replace('/',"-").trim_start_matches('-'));
+        let Ok(entries)=fs::read_dir(std::path::Path::new(&home).join(".claude/projects").join(&key)) else { return Ok(Vec::new()) };
+        let mut out=Vec::new();
+        for entry in entries.flatten() {
+            let path=entry.path();
+            if path.extension().and_then(|e|e.to_str())!=Some("jsonl") { continue }
+            let Ok(text)=fs::read_to_string(&path) else { continue };
+            let (mut start,mut end)=(i64::MAX,i64::MIN);
+            let (mut prompts,mut first)=(0usize,String::new());
+            for line in text.lines() {
+                let Ok(rec)=serde_json::from_str::<serde_json::Value>(line) else { continue };
+                if let Some(ts)=rec["timestamp"].as_str().and_then(|t|chrono::DateTime::parse_from_rfc3339(t).ok()) {
+                    let s=ts.timestamp(); start=start.min(s); end=end.max(s);
+                }
+                if rec["type"]!="user" { continue }
+                // an array is a tool result, and `<…>`/`Caveat:` are harness chatter — neither is an ask
+                let Some(t)=rec["message"]["content"].as_str() else { continue };
+                let t=t.trim();
+                if t.is_empty()||t.starts_with('<')||t.starts_with("Caveat:") { continue }
+                prompts+=1;
+                if first.is_empty() { first=t.chars().take(88).collect::<String>().replace('\n'," "); }
+            }
+            if start<=end && prompts>0 { out.push(SessionSpan{start,end,prompts,first_ask:first}) }
+        }
+        out.sort_by_key(|s|s.start);
         Ok(out)
+    }
+    /// Every indexed file with its symbol count — the skeleton a map is drawn from.
+    /// Current state only: the index keeps no snapshots, so a map cannot be rewound.
+    pub fn file_tree(&self)->std::result::Result<Vec<(String,usize)>,String>{
+        let mut st=self.db.prepare("SELECT f.path,count(s.id) FROM files f LEFT JOIN symbols s ON s.file_id=f.id GROUP BY f.id ORDER BY f.path").map_err(|e|e.to_string())?;
+        let rows=st.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)? as usize))).map_err(|e|e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())
+    }
+    /// Every symbol as (path, line, qualified_name, kind) — small enough to embed whole
+    /// (2.5k rows here) and enough for a client-side lexical search to be honest.
+    pub fn symbols_dump(&self)->std::result::Result<Vec<(String,i64,String,String)>,String>{
+        let mut st=self.db.prepare("SELECT f.path,s.start_line,s.qualified_name,s.kind FROM symbols s JOIN files f ON f.id=s.file_id ORDER BY f.path,s.start_line").map_err(|e|e.to_string())?;
+        let rows=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|e|e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())
+    }
+    /// Curated associations, query → target. The most trusted layer, so a UI shows them first.
+    pub fn list_marks(&self)->std::result::Result<Vec<(String,String)>,String>{
+        let mut st=self.db.prepare("SELECT query,target FROM marks ORDER BY id DESC").map_err(|e|e.to_string())?;
+        let rows=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())
+    }
+    /// How many distinct notes were recorded against a commit — the cheap half of `dossier`.
+    pub fn note_count(&self,commit:&str)->std::result::Result<usize,String>{
+        self.db.query_row("SELECT count(DISTINCT body) FROM notes WHERE coalesce(commit_sha,'')=?1",params![commit],|r|r.get::<_,i64>(0))
+            .map(|n|n as usize).map_err(|e|e.to_string())
     }
 
     /// Turn accumulated search failures into permanent marks: for each unresolved
@@ -926,6 +983,25 @@ fn cqn_key(q:&str)->String{ q.rsplit('.').next().unwrap_or(q).to_string() }
 /// How well a query overlaps a stored key. Strict subset matching broke the moment
 /// a question word was added, so this is proportional: shared tokens over the
 /// smaller side, with connectives ignored.
+/// Cluster (command, timestamp) pairs by shape. Pure, so the window rule can be
+/// tested without a transcript on disk. `since` keeps only stamps at or after it;
+/// ISO strings compare lexicographically, so a prefix is a valid bound.
+fn cluster_shapes(calls:Vec<(String,String)>,min_times:usize,limit:usize,since:Option<&str>)->Vec<ToolCandidate>{
+    let mut seen:std::collections::HashMap<String,(usize,String,String)>=std::collections::HashMap::new();
+    for (cmd,stamp) in calls {
+        if let Some(s)=since { if stamp.as_str()<s { continue } }
+        let shape=command_shape(&cmd);
+        if shape.is_empty() { continue }
+        let slot=seen.entry(shape).or_insert((0,cmd.chars().take(150).collect(),stamp.clone()));
+        slot.0+=1;
+        if !stamp.is_empty() { slot.2=stamp; }
+    }
+    let mut out:Vec<ToolCandidate>=seen.into_iter().filter(|(_,(n,_,_))|*n>=min_times)
+        .map(|(shape,(times,example,last_seen))|ToolCandidate{shape,times,example,last_seen}).collect();
+    out.sort_by(|a,b|b.times.cmp(&a.times).then(a.shape.cmp(&b.shape)));
+    out.truncate(limit);
+    out
+}
 /// Reduce a shell command to its shape: the tools and flags, with every literal,
 /// path and number removed. Two invocations that differ only in their arguments
 /// collapse to the same shape — which is exactly when a tool is missing.
@@ -939,6 +1015,10 @@ fn command_shape(cmd:&str)->String{
         let head=head.rsplit('/').next().unwrap_or(head);
         // Redirections split into fragments like `1` from `2>&1`; only a real command starts with a letter.
         if !head.starts_with(|c:char|c.is_ascii_alphabetic()) { continue }
+        // `C="…"; S=/path; python3 <<PY` — assignments are setup, not work. Counting them
+        // as commands scattered one heredoc habit across shapes like `Google | scratchpad | …`
+        // and made "did the rule work?" answer zero when the honest number was not zero.
+        if piece.split_whitespace().next().is_some_and(|w| w.contains('=') && !w.starts_with('-')) { continue }
         if matches!(head,"cd"|"echo"|"true"|"false"|"then"|"fi"|"do"|"done"|"if") { continue }
         // Everything past `<<` is heredoc body, not shell: keep parsing it and the
         // same script splits into a different shape every time it edits a new file.
@@ -996,11 +1076,31 @@ mod tests {
 
     /// The whole value of `candidates` is that repeated work collapses to one row:
     /// heredoc bodies, redirection fragments and count flags must not split it.
+    /// The human question was "did the rule work?", which needs a window, not a total.
+    /// Bound to scenario `candidates_since_window` in the self-spec.
+    #[test]
+    fn candidates_since_counts_only_later_commands() {
+        let calls = vec![
+            ("python3 - <<'PY'\nold\nPY".to_string(), "2026-08-28T20:00".to_string()),
+            ("python3 - <<'PY'\nold\nPY".to_string(), "2026-08-29T07:00".to_string()),
+            ("sed -n '1,5p' a.rs".to_string(),        "2026-08-29T07:30".to_string()),   // only before the date
+            ("python3 - <<'PY'\nnew\nPY".to_string(), "2026-08-29T09:00".to_string()),
+            ("python3 - <<'PY'\nnew\nPY".to_string(), "2026-08-29T10:00".to_string()),
+        ];
+        let all = cluster_shapes(calls.clone(), 1, 10, None);
+        assert_eq!(all.iter().find(|c| c.shape == "python3 <<heredoc").unwrap().times, 4, "no date: every occurrence counts");
+        let after = cluster_shapes(calls, 1, 10, Some("2026-08-29T08:26"));
+        assert_eq!(after.iter().find(|c| c.shape == "python3 <<heredoc").unwrap().times, 2, "only the later commands count");
+        assert!(after.iter().all(|c| c.shape != "sed -n"), "a shape seen only before the date is absent");
+    }
+
     #[test]
     fn command_shape_collapses_arguments_but_keeps_structure() {
         let heredoc = command_shape("python3 - <<'PY'\ns=open('src/index.rs').read()\nPY");
         assert_eq!(heredoc, "python3 <<heredoc");
         assert_eq!(command_shape("python3 - <<'PY'\nold='''x'''\nPY"), heredoc);
+        // setup assignments in front do not make it a different habit
+        assert_eq!(command_shape("C=\"/Applications/Google Chrome.app/x\"; S=/tmp/scratch; python3 - \"$S\" <<'PY'\nx\nPY"), heredoc);
         assert_eq!(command_shape("cargo test --lib 2>&1 | tail -8"), "cargo --lib | tail -N");
         assert_eq!(command_shape("cargo test --lib 2>&1 | tail -25"), "cargo --lib | tail -N");
         assert_ne!(command_shape("sed -n '1,20p' a.rs"), command_shape("sed -i '' s/a/b/ a.rs"));

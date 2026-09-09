@@ -257,10 +257,26 @@ Provides links and tracking between requirements, actions, entities, and tests.
 
 ```yaml
 traceability:
-  from: string      # Source element ID (e.g., feature)
-  to: string        # Linked element ID (e.g., action)
+  from: string      # Source element ID (e.g., feature, test)
+  to: string        # Linked element ID (e.g., action, scenario)
   relation: string  # Relationship type (implements, verifies, depends_on)
 ```
+
+Both ends must be element IDs the document declares; a link to an unknown ID is an
+error, not a tolerated hint. Tests are declared so they can be linked:
+
+```yaml
+tests:
+  - id: string          # Element ID, used as `from` in a `verifies` link
+    reference: string   # What the runner calls it (cargo path, jest describe/it, …)
+    runner: string      # Optional: cargo, jest, pytest, …
+```
+
+`test --verifies--> scenario` is the seam between a human claim and its evidence.
+FDML does not run the test; it records that this test is what proves that scenario,
+so a run's result can be attributed back to the claim it was meant to prove. A test
+may verify several scenarios; which assertion proved which line stays *unknown*
+until the runner can say — that is a valid, honest state of the model.
 
 ---
 

@@ -14,6 +14,7 @@ mod csharp;
 mod javascript;
 mod typescript;
 mod go_lang;
+mod c;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -73,6 +74,7 @@ pub fn run(root: &Path, exclude_patterns: &[String]) -> Result<ScanResult> {
             Language::JavaScript => javascript::JavaScriptScanner::parse_file(&source, &rel_path)?,
             Language::TypeScript => typescript::TypeScriptScanner::parse_file(&source, &rel_path)?,
             Language::Go => go_lang::GoScanner::parse_file(&source, &rel_path)?,
+            Language::C => c::CScanner::parse_file(&source, &rel_path)?,
         };
 
         analysis.module_path = module_path;
@@ -98,6 +100,7 @@ pub fn run(root: &Path, exclude_patterns: &[String]) -> Result<ScanResult> {
         if languages_detected.contains("javascript") { langs.push(Language::JavaScript); }
         if languages_detected.contains("typescript") { langs.push(Language::TypeScript); }
         if languages_detected.contains("go") { langs.push(Language::Go); }
+        if languages_detected.contains("c") { langs.push(Language::C); }
         langs
     };
 
@@ -151,6 +154,12 @@ fn compute_module_path(rel_path: &str, language: &Language) -> String {
         }
         Language::CSharp => {
             let stripped = rel_path.trim_end_matches(".cs");
+            stripped.replace('/', ".").replace('\\', ".")
+        }
+        Language::C => {
+            // A C module is its file: `src/world/walls.c` and `src/world/walls.h`
+            // are one unit, so both map to `src.world.walls`.
+            let stripped = rel_path.trim_end_matches(".c").trim_end_matches(".h");
             stripped.replace('/', ".").replace('\\', ".")
         }
         Language::Go => {
@@ -404,7 +413,8 @@ fn count_elements(elements: &[CodeElement], stats: &mut ScanStatistics) {
             ElementType::Interface => stats.interfaces += 1,
             ElementType::Enum => stats.enums += 1,
             ElementType::Field | ElementType::Property => stats.fields += 1,
-            ElementType::Module => {}
+            // no counter for these yet; adding one means changing ScanStatistics for every consumer
+            ElementType::Module | ElementType::Macro | ElementType::TypeAlias => {}
         }
         count_elements(&el.children, stats);
     }
